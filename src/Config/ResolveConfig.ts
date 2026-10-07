@@ -7,6 +7,7 @@ import type {
 } from "../Types/BrowserGuardConfig";
 import { ClampInteger, ResolveBoolean, ResolveOrigins, ResolveSeverity } from "./ConfigValidators";
 import { AvailablePresets, DefaultPreset, GetPresetConfig } from "./Presets";
+import { ExpandServices, MergeOrigins, ResolveServices } from "./Services";
 
 /**
  * Límites de seguridad para valores numéricos configurables.
@@ -72,6 +73,8 @@ function ResolveWeights(value: unknown): ResolvedConfig["Risk"]["Weights"] {
 export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
   const base = GetPresetConfig(ResolvePreset(config.Preset));
   const monitors = config.Monitors ?? {};
+  const services = ResolveServices(config.Services);
+  const contributed = ExpandServices(services);
 
   return {
     Preset: base.Preset,
@@ -90,12 +93,22 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
       Channels: ResolveBoolean(monitors.Channels, base.Monitors.Channels),
       Realms: ResolveBoolean(monitors.Realms, base.Monitors.Realms),
     },
+    Services: services,
+    Learning: {
+      Enabled: ResolveBoolean(config.Learning?.Enabled, base.Learning.Enabled),
+    },
     Network: {
-      AllowedOrigins: ResolveOrigins(config.Network?.AllowedOrigins),
+      AllowedOrigins: MergeOrigins(
+        ResolveOrigins(config.Network?.AllowedOrigins),
+        contributed.Network,
+      ),
       BlockedOrigins: ResolveOrigins(config.Network?.BlockedOrigins),
     },
     Dom: {
-      AllowedScriptOrigins: ResolveOrigins(config.Dom?.AllowedScriptOrigins),
+      AllowedScriptOrigins: MergeOrigins(
+        ResolveOrigins(config.Dom?.AllowedScriptOrigins),
+        contributed.Scripts,
+      ),
     },
     Forensic: {
       Enabled: ResolveBoolean(config.Forensic?.Enabled, base.Forensic.Enabled),
@@ -121,6 +134,7 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
         ConfigLimits.IntervalMs.Min,
         ConfigLimits.IntervalMs.Max,
       ),
+      TrustedWrapperMarkers: contributed.WrapperMarkers,
     },
     Risk: {
       MinSeverity: ResolveSeverity(config.Risk?.MinSeverity, base.Risk.MinSeverity),

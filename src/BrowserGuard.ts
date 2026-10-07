@@ -2,8 +2,10 @@ import { ResolveConfig } from "./Config/ResolveConfig";
 import { CreateDetectors, CreateMonitors, CreateReporters } from "./Core/Components";
 import { EventBus } from "./Core/EventBus";
 import { FindingHistory } from "./Core/FindingHistory";
+import { GuardStore } from "./Core/GuardStore";
 import { GuardContext } from "./Core/GuardContext";
 import { MonitorRegistry } from "./Core/MonitorRegistry";
+import { OriginLearner } from "./Core/OriginLearner";
 import { PluginManager } from "./Core/PluginManager";
 import { RiskEngine } from "./Core/RiskEngine";
 import { ShowConsoleNotice } from "./Reporters/ConsoleNotice";
@@ -15,6 +17,7 @@ import type {
   FindingEventName,
   GuardEventHandler,
   GuardEventName,
+  GuardSnapshot,
   GuardStatus,
   PublicEventMap,
 } from "./Types/GuardStatus";
@@ -110,7 +113,10 @@ export class BrowserGuard {
   private Reporters: Reporter[] = [];
   private readonly CustomReporters: Reporter[];
   private readonly Plugins: PluginManager;
+  private readonly Store: GuardStore;
   private Context: GuardContext | null = null;
+  /** Solo con Learning.Enabled. Se conserva después de Stop() para consultar lo aprendido. */
+  private Learner: OriginLearner | null = null;
   private readonly Unsubscribers: (() => void)[] = [];
 
   private constructor(config: BrowserGuardConfig) {
@@ -129,6 +135,10 @@ export class BrowserGuard {
       ? new RingBuffer<SecurityEvent>(this.Config.Forensic.MaxEvents)
       : null;
     this.Engine = new RiskEngine(this.Config.Risk.Weights, this.Config.Risk.MinSeverity);
+    this.Store = new GuardStore(
+      { Running: false, Bot: null, LastFinding: null, Statistics: this.History.GetStatistics() },
+      ReportHandlerError,
+    );
   }
 
   // ───────────────────────────── API estática ─────────────────────────────
@@ -183,6 +193,11 @@ export class BrowserGuard {
     return GetActiveInstance()?.GetTimeline() ?? [];
   }
 
+  /** Configuración propuesta por el modo aprendizaje de la instancia activa, o null. */
+  public static GetLearnedConfig(): BrowserGuardConfig | null {
+    return GetActiveInstance()?.GetLearnedConfig() ?? null;
+  }
+
   /** Retorna la instancia en ejecución, o null. */
   public static GetInstance(): BrowserGuard | null {
     return GetActiveInstance();
@@ -215,6 +230,16 @@ export class BrowserGuard {
   }
 
   /**
+   * Suscribe un listener a los cambios del snapshot. Retorna la función para desuscribirlo.
+   * Compatible con useSyncExternalStore de React (función estable, enlazada).
+   */
+  public readonly Subscribe = (listener: () => void): (() => void) =>
+    this.Store.Subscribe(listener);
+
+  /** Snapshot inmutable actual (misma referencia mientras no cambie). */
+  public readonly GetSnapshot = (): GuardSnapshot => this.Store.Get();
+
+  /**
    * Detiene todos los monitores, restaura las funciones interceptadas y libera
    * listeners y timers. El historial sigue disponible mediante GetReport().
    */
@@ -244,6 +269,7 @@ export class BrowserGuard {
     }
     this.Reporters = [];
     this.PublicBus.Clear();
+    this.Store.Update({ Running: false });
 
     if (GetActiveInstance() === this) {
       SetActiveInstance(null);
@@ -289,6 +315,16 @@ export class BrowserGuard {
     return structuredClone(this.Config);
   }
 
+  /**
+   * Orígenes de terceros observados en modo aprendizaje que aún no están permitidos,
+   * listos para agregar a la configuración. null si Learning no está habilitado.
+   * Revísalos antes de adoptarlos: lo que estuvo presente durante el aprendizaje
+   * (incluido un script malicioso) también aparece.
+   */
+  public GetLearnedConfig(): BrowserGuardConfig | null {
+    return this.Learner?.GetLearnedConfig() ?? null;
+  }
+
   // ─────────────────────────────── Internos ────────────────────────────────
 
   private Activate(): void {
@@ -299,11 +335,15 @@ export class BrowserGuard {
       this.DispatchEvent(event);
     });
     this.Context = context;
+    if (this.Config.Learning.Enabled) {
+      this.Learner = new OriginLearner(this.Config, () => context.GetPageOrigin());
+    }
 
     // Los plugins se instalan antes de crear e iniciar los monitores: pueden capturar
     // referencias originales (fetch) y proveer el header de veredicto desde el inicio.
     this.Plugins.Setup(this.Config, context, this.Engine, (assessment) => {
       this.PublicBus.Emit("Bot", assessment);
+      this.Store.Update({ Bot: assessment });
     });
     this.Reporters = [
       ...CreateReporters(this.Config),
@@ -318,6 +358,7 @@ export class BrowserGuard {
     }
     this.Running = true;
     this.Registry.StartAll();
+    this.Store.Update({ Running: true, Bot: this.Plugins.GetBotAssessment() });
 
     if (this.Config.Console === "notice") {
       context.Safely(() => {
@@ -338,7 +379,19 @@ export class BrowserGuard {
 
   private DispatchEvent<K extends SecurityEventType>(event: TypedSecurityEvent<K>): void {
     this.Timeline?.Push(event);
+    if (this.Learner) {
+      this.Learn(event);
+    }
     this.InternalBus.Emit(event.Type, event as InternalEventMap[K]);
+  }
+
+  private Learn(event: SecurityEvent): void {
+    const learner = this.Learner;
+    if (event.Type === "network.request") {
+      learner?.ObserveRequest((event as InternalEventMap["network.request"]).Data);
+    } else if (event.Type === "dom.element-inserted") {
+      learner?.ObserveElement((event as InternalEventMap["dom.element-inserted"]).Data);
+    }
   }
 
   private RunDetector(detector: Detector, event: SecurityEvent): void {
@@ -355,6 +408,7 @@ export class BrowserGuard {
 
   private Publish(finding: SecurityFinding): void {
     this.History.Add(finding);
+    this.Store.Update({ LastFinding: finding, Statistics: this.History.GetStatistics() });
 
     this.PublicBus.Emit("Finding", finding);
     if (finding.Severity !== "info") {

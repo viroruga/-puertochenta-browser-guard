@@ -34,7 +34,7 @@ export class ChallengeClient {
   private readonly Fetch: typeof fetch | null;
   private readonly SetTimer: (callback: () => void, delay: number) => number;
   private readonly ClearTimer: (id: number) => void;
-  private State: ProofState = "pending";
+  private StateValue: ProofState = "pending";
   private Proof: string | null = null;
   private ExpiresAt = 0;
   private Timer: number | null = null;
@@ -45,6 +45,7 @@ export class ChallengeClient {
     private readonly Endpoint: string,
     private readonly SessionId: string,
     window: Window & typeof globalThis,
+    private readonly OnStateChange: (state: ProofState) => void = () => undefined,
   ) {
     this.Fetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
     this.SetTimer = window.setTimeout.bind(window) as (
@@ -59,7 +60,7 @@ export class ChallengeClient {
   }
 
   public GetState(): ProofState {
-    return this.State;
+    return this.StateValue;
   }
 
   /** Prueba vigente, o null si aún no está lista o venció. */
@@ -75,12 +76,21 @@ export class ChallengeClient {
     }
   }
 
+  /** Cambia el estado y notifica solo si es distinto (evita snapshots redundantes). */
+  private SetState(state: ProofState): void {
+    if (state === this.StateValue) {
+      return;
+    }
+    this.StateValue = state;
+    this.OnStateChange(state);
+  }
+
   private async Refresh(): Promise<void> {
     if (this.Cancellation.aborted) {
       return;
     }
-    if (this.State !== "ready") {
-      this.State = "pending";
+    if (this.StateValue !== "ready") {
+      this.SetState("pending");
     }
     try {
       const challenge = await this.Request();
@@ -94,13 +104,13 @@ export class ChallengeClient {
       }
       this.Proof = `${challenge.Challenge}~${nonce}`;
       this.ExpiresAt = challenge.ExpiresAt;
-      this.State = "ready";
+      this.SetState("ready");
       this.Failures = 0;
       this.Schedule(
         Math.max(MinRefreshDelayMs, challenge.ExpiresAt - Date.now() - RefreshMarginMs),
       );
     } catch {
-      this.State = this.GetProof() !== null ? "ready" : "failed";
+      this.SetState(this.GetProof() !== null ? "ready" : "failed");
       const delay = RetryDelaysMs[Math.min(this.Failures, RetryDelaysMs.length - 1)] ?? 300_000;
       this.Failures++;
       this.Schedule(delay);

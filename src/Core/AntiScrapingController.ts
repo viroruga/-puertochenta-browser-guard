@@ -37,7 +37,10 @@ export class AntiScrapingController {
     });
     // Se crea durante Setup, antes de interceptar fetch: sus solicitudes no se observan.
     this.Challenge = Settings.Challenge
-      ? new ChallengeClient(Settings.Challenge.Endpoint, Context.SessionId, Context.Window)
+      ? new ChallengeClient(Settings.Challenge.Endpoint, Context.SessionId, Context.Window, () => {
+          // El estado de la prueba forma parte del veredicto publicado.
+          onVerdict(this.GetAssessment());
+        })
       : null;
     this.Challenge?.Start();
     if (Settings.VerdictHeader.Enabled) {

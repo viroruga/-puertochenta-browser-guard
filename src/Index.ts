@@ -15,6 +15,7 @@ export type {
   RemoteMetadataValue,
   ResolvedConfig,
 } from "./Types/BrowserGuardConfig";
+export type { KnownService } from "./Config/Services";
 export type { Severity } from "./Types/Severity";
 export type {
   FindingCategory,
@@ -36,6 +37,7 @@ export type {
   FindingHandler,
   GuardEventHandler,
   GuardEventName,
+  GuardSnapshot,
   GuardStatus,
 } from "./Types/GuardStatus";
 export type { BotAssessment, BotVerdict, ProofState } from "./Types/Bot";

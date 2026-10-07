@@ -1,15 +1,12 @@
-feat: server-verifiable anti-scraping challenge
+feat: reactive store, known services and learning mode
 
-- New entry @puertochenta/browser-guard/server (Web Crypto only):
-  CreateChallenge issues HMAC-signed, session-bound, expiring challenges;
-  VerifyRequest checks signature, expiry, session and proof of work and
-  returns an allow/challenge/deny decision
-- AntiScraping({ Challenge: { Endpoint } }): fetches the challenge with the
-  original fetch, solves the proof of work asynchronously, renews it before
-  expiry and appends it to the verdict header; Proof state exposed in
-  GetBotAssessment()
-- Forged verdict headers and JavaScript-less clients are now rejected
-- Collector example and Vite demo use the real verifier
-- Unit tests, e2e on Chromium/Firefox/WebKit, packed-package check of the
-  server entry, docs (EN/ES), changeset
-
+- Guard.Subscribe / Guard.GetSnapshot: observable store with immutable
+  snapshots (Running, Bot, LastFinding, Statistics), compatible with
+  useSyncExternalStore, Vue refs, Angular signals and Svelte stores.
+- Challenge proof state changes are published in the Bot event/snapshot.
+- Services: catalog of well-known third parties that extends allowed
+  origins; Sentry and zone.js wrappers are trusted by following their
+  markers back to the legitimate function (declared services only).
+- Learning mode: records non-allowed third-party origins and proposes
+  them via GetLearnedConfig().
+- Docs (EN/ES), unit and e2e tests, changeset.

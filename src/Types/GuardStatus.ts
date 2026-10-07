@@ -3,7 +3,7 @@ import type { GuardPreset } from "./BrowserGuardConfig";
 import type { RemoteStats } from "./Remote";
 import type { MonitorStatus } from "./Monitor";
 import type { PluginStatus } from "./Plugin";
-import type { SecurityFinding } from "./SecurityFinding";
+import type { FindingStatistics, SecurityFinding } from "./SecurityFinding";
 
 /**
  * Eventos públicos a los que puede suscribirse la aplicación.
@@ -24,6 +24,19 @@ export type PublicEventMap = Record<FindingEventName, SecurityFinding> & { Bot: 
 
 /** Manejador tipado según el evento. */
 export type GuardEventHandler<K extends GuardEventName> = (payload: PublicEventMap[K]) => void;
+
+/**
+ * Snapshot inmutable para frameworks (ver Guard.Subscribe / Guard.GetSnapshot).
+ */
+export interface GuardSnapshot {
+  Running: boolean;
+  /** Veredicto anti-scraping, o null sin el plugin AntiScraping. */
+  Bot: BotAssessment | null;
+  /** Último hallazgo emitido, o null. */
+  LastFinding: SecurityFinding | null;
+  /** Estadísticas acumuladas desde Start(). */
+  Statistics: FindingStatistics;
+}
 
 /**
  * Estado operativo de BrowserGuard.

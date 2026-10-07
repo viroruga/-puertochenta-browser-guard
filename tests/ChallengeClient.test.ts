@@ -65,6 +65,22 @@ describe("ChallengeClient", () => {
     client.Dispose();
   });
 
+  it("notifica solo los cambios de estado", async () => {
+    const states: string[] = [];
+    const client = new ChallengeClient(
+      "https://app.example.com/api/challenge",
+      "s",
+      FakeWindow(vi.fn(IssueFor)),
+      (state) => states.push(state),
+    );
+    client.Start();
+    await vi.waitFor(() => {
+      expect(client.GetState()).toBe("ready");
+    });
+    expect(states).toEqual(["ready"]);
+    client.Dispose();
+  });
+
   it("si el endpoint falla queda en failed y reintenta; Dispose cancela", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_url: string) => Promise.resolve(JsonResponse({ error: true }, 500)));
@@ -145,9 +161,14 @@ describe("Desafío integrado en el plugin", () => {
         }),
       ],
     });
+    const onBot = vi.fn();
+    guard.On("Bot", onBot);
     await vi.waitFor(() => {
       expect(guard.GetBotAssessment()?.Proof).toBe("ready");
     });
+    // El cambio de estado de la prueba se publica en el evento "Bot" y en el snapshot.
+    expect(onBot).toHaveBeenCalledWith(expect.objectContaining({ Proof: "ready" }));
+    expect(guard.GetSnapshot().Bot?.Proof).toBe("ready");
     const response = await window.fetch("/api/catalog");
     expect(await response.json()).toEqual({ Decision: "allow" });
     // La solicitud del desafío no pasó por el interceptor (fetch original capturado).

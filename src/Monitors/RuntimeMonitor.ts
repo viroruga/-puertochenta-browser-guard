@@ -5,6 +5,9 @@ import { BaseMonitor } from "./BaseMonitor";
 
 type RuntimeWindow = Window & typeof globalThis;
 
+/** Profundidad máxima al seguir una cadena de wrappers marcados. */
+const MaxWrapperDepth = 5;
+
 interface RuntimeTarget {
   Name: string;
   /** Objeto que contiene la función (window, un prototipo, ...). */
@@ -45,6 +48,8 @@ export const RuntimeTargets: readonly RuntimeTarget[] = [
  * - En cada verificación compara por identidad (costo O(n), n ≈ 11) y, solo si
  *   cambió, analiza la nueva función con NativeFunctionUtils.
  * - Ignora los interceptores instalados por la propia librería.
+ * - Ignora los wrappers de servicios declarados (Sentry, Zone.js) cuando su marca
+ *   apunta, directa o encadenadamente, a la referencia legítima anterior.
  */
 export class RuntimeMonitor extends BaseMonitor {
   public readonly Name = "RuntimeMonitor";
@@ -59,7 +64,11 @@ export class RuntimeMonitor extends BaseMonitor {
       const value = this.Read(target);
       this.Initial.set(target.Name, value);
       this.Baseline.set(target.Name, value);
-      if (typeof value === "function" && !this.Context.IsOwnFunction(value)) {
+      if (
+        typeof value === "function" &&
+        !this.Context.IsOwnFunction(value) &&
+        !this.UnwrapsTo(value, (inner) => this.Analyze(target, inner).LooksNative)
+      ) {
         const analysis = this.Analyze(target, value);
         if (!analysis.LooksNative) {
           this.EmitChange({ Target: target.Name, Phase: "baseline", Analysis: analysis });
@@ -94,7 +103,14 @@ export class RuntimeMonitor extends BaseMonitor {
         continue;
       }
       this.Baseline.set(target.Name, current);
-      if (current === this.Initial.get(target.Name)) {
+      const initial = this.Initial.get(target.Name);
+      if (
+        current === initial ||
+        this.UnwrapsTo(
+          current,
+          (inner) => inner === previous || inner === initial || this.Context.IsOwnFunction(inner),
+        )
+      ) {
         continue;
       }
 
@@ -110,6 +126,35 @@ export class RuntimeMonitor extends BaseMonitor {
         Analysis: this.Analyze(target, current),
       });
     }
+  }
+
+  /**
+   * Sigue las marcas de wrappers confiables (p. ej. `__sentry_original__`) e indica si
+   * alguna función de la cadena cumple la condición. Las marcas son falsificables: por
+   * eso solo se usan las de servicios declarados y se exige que la cadena llegue a una
+   * referencia legítima.
+   */
+  private UnwrapsTo(value: unknown, accept: (inner: unknown) => boolean): boolean {
+    const markers = this.Context.Config.Integrity.TrustedWrapperMarkers;
+    let current = value;
+    for (let depth = 0; depth < MaxWrapperDepth && typeof current === "function"; depth++) {
+      let inner: unknown;
+      try {
+        inner = markers
+          .map((marker) => (current as Record<string, unknown>)[marker])
+          .find((candidate) => typeof candidate === "function");
+      } catch {
+        return false;
+      }
+      if (inner === undefined) {
+        return false;
+      }
+      if (accept(inner)) {
+        return true;
+      }
+      current = inner;
+    }
+    return false;
   }
 
   private Read(target: RuntimeTarget): unknown {

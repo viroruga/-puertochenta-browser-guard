@@ -35,6 +35,7 @@ Guard.On("Threat", (Finding) => {
 - [Quick start](#quick-start)
 - [API](#api)
 - [Configuration](#configuration)
+- [Third-party services and learning mode](#third-party-services-and-learning-mode)
 - [Presets](#presets)
 - [Monitors](#monitors)
 - [Detection and risk scoring](#detection-and-risk-scoring)
@@ -139,6 +140,8 @@ Guard.On("Critical", (Finding) => {
 | `BrowserGuard.GetInstance()`                                   | Running instance or `null`.                                                                                                                                                 |
 | `Guard.GetConfig()`                                            | Copy of the effective configuration.                                                                                                                                        |
 | `BrowserGuard.GetBotAssessment()` / `Guard.GetBotAssessment()` | Anti-scraping verdict for the session (`null` when disabled).                                                                                                               |
+| `Guard.Subscribe(listener)` / `Guard.GetSnapshot()`            | Observable store for frameworks (`useSyncExternalStore`, signals, Svelte stores). See [Reactive state](#reactive-state-react-vue-angular-svelte).                           |
+| `BrowserGuard.GetLearnedConfig()` / `Guard.GetLearnedConfig()` | Origins observed in learning mode that are not allowed yet (`null` when disabled).                                                                                          |
 
 Static methods act on the active instance; without one they do nothing (`GetReport()` and
 `GetStatus()` return `null`).
@@ -212,6 +215,12 @@ interface BrowserGuardConfig {
     Realms?: boolean; // extend monitoring into same-origin iframes
   };
 
+  Services?: KnownService[]; // "stripe", "sentry", "zone.js", ... see "Third-party services"
+
+  Learning?: {
+    Enabled?: boolean; // record third-party origins for GetLearnedConfig()
+  };
+
   Network?: {
     AllowedOrigins?: string[]; // "https://api.example.com" or "https://*.example.com"
     BlockedOrigins?: string[]; // detected and reported as critical; not blocked
@@ -251,6 +260,61 @@ Safe defaults:
 - empty origin lists: every external origin is considered **unknown**;
 - no forensic mode; history and timeline are always bounded;
 - origins are normalized (lowercase, no path) and deduplicated.
+
+## Third-party services and learning mode
+
+Every external origin is **unknown** until you allow it. Two tools keep that list short and
+accurate.
+
+### Known services
+
+```ts
+BrowserGuard.Start({
+  Services: ["stripe", "google-analytics", "sentry"],
+});
+```
+
+Each service adds its documented script and network origins to `Dom.AllowedScriptOrigins` and
+`Network.AllowedOrigins` (your own entries are kept). Available: `stripe`, `paypal`,
+`google-analytics`, `google-tag-manager`, `google-fonts`, `recaptcha`, `cloudflare-turnstile`,
+`youtube`, `sentry`, `hotjar`, `intercom`, `zone.js`. Unknown names are ignored.
+
+**Trusted wrappers.** Sentry and zone.js (Angular) wrap `fetch`, `XMLHttpRequest`, `setTimeout`
+and other functions, which `RuntimeMonitor` would otherwise report. When the service is declared,
+BrowserGuard follows the marker these libraries leave on their wrappers (`__sentry_original__`,
+`__zone_symbol__OriginalDelegate`) and accepts the wrapper only if the chain leads back to the
+legitimate function (the previous reference, BrowserGuard's own interceptor, or a native function
+at start). Traffic through the wrapper is still monitored. Markers can be forged, so they are only
+honored for declared services and only when the chain ends where it should.
+
+The catalog follows each vendor's CSP documentation. If a vendor adds a domain, the learning mode
+shows it.
+
+### Learning mode
+
+```ts
+const Guard = BrowserGuard.Start({ Learning: { Enabled: true } });
+
+// ...use the application (staging, QA, an end-to-end run)...
+
+console.log(Guard.GetLearnedConfig());
+// {
+//   Network: { AllowedOrigins: ["https://api.partner.com", "https://cdn.vendor.com"] },
+//   Dom: { AllowedScriptOrigins: ["https://widget.vendor.com"] }
+// }
+```
+
+While enabled, BrowserGuard records the third-party origins it observes (requests on every
+monitored transport, scripts, iframes, objects) that are not already allowed. Findings are still
+emitted. `GetLearnedConfig()` returns only what is missing, ready to merge into your configuration;
+it is still available after `Stop()` and returns `null` when learning is disabled.
+
+- It never learns your own origin, `BlockedOrigins` or non-network sources (extensions, `data:`).
+- At most 200 origins per list; exact origins only (replace them with `https://*.vendor.com`
+  wildcards if you prefer).
+- **Review the result before adopting it.** Anything present during learning (including a
+  malicious script) is listed too. Learn in a controlled environment, not from production
+  traffic.
 
 ## Presets
 
@@ -577,9 +641,75 @@ import { AppComponent } from "./app/app.component";
 bootstrapApplication(AppComponent);
 ```
 
-> Angular uses zone.js, which wraps `fetch`, `XMLHttpRequest`, `setTimeout` and other APIs. If
-> BrowserGuard starts after zone.js, `RuntimeMonitor` reports those functions as modified before
-> start. Disable it with `Monitors: { Runtime: false }` or lower the `runtime.preexisting` weight.
+> Angular uses zone.js, which wraps `fetch`, `XMLHttpRequest`, `setTimeout` and other APIs.
+> Declare it with `Services: ["zone.js"]` so `RuntimeMonitor` recognizes those wrappers (see
+> [Known services](#known-services)).
+
+### Reactive state (React, Vue, Angular, Svelte)
+
+`Guard.Subscribe(listener)` and `Guard.GetSnapshot()` form a minimal external store, with no
+framework dependency. The snapshot is immutable and keeps its identity until something changes:
+
+```ts
+interface GuardSnapshot {
+  Running: boolean;
+  Bot: BotAssessment | null; // anti-scraping verdict (including proof state)
+  LastFinding: SecurityFinding | null;
+  Statistics: { Total; Critical; High; Medium; Low; Info };
+}
+```
+
+Both are bound functions, so they can be passed around directly:
+
+```tsx
+// React 18+
+import { useSyncExternalStore } from "react";
+import { Guard } from "./SecurityBootstrap";
+
+export function useGuard() {
+  return useSyncExternalStore(Guard.Subscribe, Guard.GetSnapshot, Guard.GetSnapshot);
+}
+```
+
+```ts
+// Vue 3
+import { onScopeDispose, shallowRef } from "vue";
+import { Guard } from "./SecurityBootstrap";
+
+export function useGuard() {
+  const snapshot = shallowRef(Guard.GetSnapshot());
+  onScopeDispose(Guard.Subscribe(() => (snapshot.value = Guard.GetSnapshot())));
+  return snapshot;
+}
+```
+
+```ts
+// Angular 16+ (signals)
+import { DestroyRef, Injectable, inject, signal } from "@angular/core";
+import { Guard } from "./security-bootstrap";
+
+@Injectable({ providedIn: "root" })
+export class GuardState {
+  readonly Snapshot = signal(Guard.GetSnapshot());
+
+  constructor() {
+    inject(DestroyRef).onDestroy(Guard.Subscribe(() => this.Snapshot.set(Guard.GetSnapshot())));
+  }
+}
+```
+
+```ts
+// Svelte
+import { readable } from "svelte/store";
+import { Guard } from "./SecurityBootstrap";
+
+export const GuardState = readable(Guard.GetSnapshot(), (set) =>
+  Guard.Subscribe(() => set(Guard.GetSnapshot())),
+);
+```
+
+Notifications are synchronous and happen on every finding: keep listeners cheap. For
+per-finding logic, `Guard.On("Threat", ...)` is still the right tool.
 
 ### Next.js / Nuxt (SSR)
 

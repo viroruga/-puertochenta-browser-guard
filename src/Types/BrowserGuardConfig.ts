@@ -1,4 +1,5 @@
 import type { RiskWeightOverrides } from "../Core/RiskSignals";
+import type { KnownService } from "../Config/Services";
 import type { Reporter } from "../Reporters/Reporter";
 import type { GuardPlugin } from "./Plugin";
 import type { Severity } from "./Severity";
@@ -199,6 +200,20 @@ export interface BrowserGuardConfig {
 
   Monitors?: MonitorToggles;
 
+  /**
+   * Servicios de terceros que usa la página. Agrega sus orígenes a las listas permitidas
+   * y reconoce sus wrappers sobre funciones del runtime (Sentry, Zone.js).
+   */
+  Services?: KnownService[];
+
+  /**
+   * Modo aprendizaje: registra los orígenes de terceros observados para proponer
+   * listas permitidas con GetLearnedConfig(). Los hallazgos se siguen emitiendo.
+   */
+  Learning?: {
+    Enabled?: boolean;
+  };
+
   Network?: {
     /** Orígenes permitidos. Admite comodín de subdominio: "https://*.example.com". */
     AllowedOrigins?: string[];
@@ -254,6 +269,10 @@ export interface ResolvedConfig {
   ConsoleMinSeverity: Severity;
   Notice: ConsoleNoticeText;
   Monitors: Required<MonitorToggles>;
+  Services: KnownService[];
+  Learning: {
+    Enabled: boolean;
+  };
   Network: {
     AllowedOrigins: string[];
     BlockedOrigins: string[];
@@ -270,6 +289,8 @@ export interface ResolvedConfig {
   };
   Integrity: {
     IntervalMs: number;
+    /** Marcas de wrappers confiables (de los servicios declarados). */
+    TrustedWrapperMarkers: string[];
   };
   Risk: {
     MinSeverity: Severity;
