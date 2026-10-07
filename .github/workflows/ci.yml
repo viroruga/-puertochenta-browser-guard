@@ -40,7 +40,7 @@ jobs:
         run: pnpm pack --dry-run
 
   e2e:
-    name: Browser tests (Chromium, Firefox)
+    name: Browser tests (Chromium, Firefox, WebKit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +51,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Install browsers
-        run: pnpm exec playwright install --with-deps chromium firefox
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
       - name: Upload report
         if: failure()

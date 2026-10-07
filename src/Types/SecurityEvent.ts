@@ -14,7 +14,16 @@ export interface SecurityEvent<T = unknown> {
 /**
  * Mecanismo de red observado.
  */
-export type NetworkTransport = "fetch" | "xhr" | "websocket";
+export type NetworkTransport =
+  | "fetch"
+  | "xhr"
+  | "websocket"
+  | "beacon"
+  | "eventsource"
+  | "form"
+  | "window-open"
+  | "resource"
+  | "service-worker";
 
 /**
  * Datos de una solicitud de red saliente.
@@ -27,6 +36,13 @@ export interface NetworkRequestData {
   Method?: string;
   Protocols?: string[];
   HasQuery: boolean;
+  /**
+   * Longitud de la query string (0 si no tiene). Solo la longitud: una query muy larga
+   * hacia un origen desconocido es un patrón típico de exfiltración (?c=<cookies>).
+   */
+  QueryLength: number;
+  /** Tipo de recurso informado por el navegador (img, css, link, ...), para "resource". */
+  InitiatorType?: string;
 }
 
 /**
@@ -154,6 +170,15 @@ export interface BotActivityData {
 }
 
 /**
+ * Acceso de un script al realm de un iframe del mismo origen.
+ */
+export interface RealmAccessData {
+  /** Origen del iframe: "about:blank", "srcdoc" o la URL saneada. */
+  Frame: string;
+  Access: "contentWindow" | "contentDocument";
+}
+
+/**
  * Sinks de DOM XSS observados.
  */
 export type SinkName =
@@ -165,7 +190,12 @@ export type SinkName =
   | "srcdoc"
   | "setAttribute"
   | "setTimeout"
-  | "setInterval";
+  | "setInterval"
+  | "href"
+  | "src"
+  | "action"
+  | "formAction"
+  | "data";
 
 /**
  * Escritura de contenido con indicadores de riesgo en un sink peligroso.
@@ -191,6 +221,7 @@ export interface SecurityEventDataMap {
   "bot.environment": BotEnvironmentData;
   "bot.activity": BotActivityData;
   "dom.sink": SinkData;
+  "runtime.realm": RealmAccessData;
 }
 
 export type SecurityEventType = keyof SecurityEventDataMap;

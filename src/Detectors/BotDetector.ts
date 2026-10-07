@@ -6,9 +6,21 @@ import type {
   BotActivityData,
   BotEnvironmentData,
   NetworkRequestData,
+  NetworkTransport,
   SecurityEvent,
 } from "../Types/SecurityEvent";
 import { RequestPatternTracker } from "./RequestPatternTracker";
+
+/**
+ * Canales que no reflejan solicitudes hechas por código (una página con muchas imágenes
+ * no es una ráfaga de scraping): no cuentan para el ritmo de solicitudes.
+ */
+const PassiveTransports: ReadonlySet<NetworkTransport> = new Set([
+  "resource",
+  "form",
+  "window-open",
+  "service-worker",
+]);
 
 /** Tiempo sin ninguna interacción (con la pestaña visible) que se considera señal. */
 export const NoInteractionAfterMs = 30_000;
@@ -142,7 +154,11 @@ export class BotDetector implements Detector {
   }
 
   private AnalyzeRequest(data: NetworkRequestData, timestamp: number): FindingCandidate | null {
-    if (!this.Settings.Signals.RequestRate || data.Origin === null) {
+    if (
+      !this.Settings.Signals.RequestRate ||
+      data.Origin === null ||
+      PassiveTransports.has(data.Transport)
+    ) {
       return null;
     }
     const pattern = this.Tracker.Record(data.Url, timestamp);

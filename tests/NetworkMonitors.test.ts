@@ -42,6 +42,7 @@ describe("FetchMonitor", () => {
       Origin: "https://api.example.com",
       Method: "POST",
       HasQuery: true,
+      QueryLength: 12,
     });
     expect(event?.Stack).toBeTypeOf("string");
     expect(JSON.stringify(event)).not.toContain("secret");
@@ -181,6 +182,7 @@ describe("XhrMonitor", () => {
       Origin: "https://evil.example",
       Method: "POST",
       HasQuery: true,
+      QueryLength: 6,
     });
     expect(stubSend).toHaveBeenCalledWith("payload");
     expect(xhr.readyState).toBe(XMLHttpRequest.OPENED);
@@ -237,6 +239,7 @@ describe("WebSocketMonitor", () => {
       Origin: "wss://socket.example",
       Protocols: ["chat", "v2"],
       HasQuery: true,
+      QueryLength: 11,
     });
   });
 

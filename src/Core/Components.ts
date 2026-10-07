@@ -4,10 +4,13 @@ import { PrototypePollutionDetector } from "../Detectors/PrototypePollutionDetec
 import { RuntimeIntegrityDetector } from "../Detectors/RuntimeIntegrityDetector";
 import { ScriptInjectionDetector } from "../Detectors/ScriptInjectionDetector";
 import { XssSinkDetector } from "../Detectors/XssSinkDetector";
+import { ChannelMonitor } from "../Monitors/ChannelMonitor";
 import { CspMonitor } from "../Monitors/CspMonitor";
 import { DomMonitor } from "../Monitors/DomMonitor";
 import { FetchMonitor } from "../Monitors/FetchMonitor";
 import { PrototypeMonitor } from "../Monitors/PrototypeMonitor";
+import { RealmMonitor } from "../Monitors/RealmMonitor";
+import { ResourceMonitor } from "../Monitors/ResourceMonitor";
 import { RuntimeMonitor } from "../Monitors/RuntimeMonitor";
 import { SinkMonitor } from "../Monitors/SinkMonitor";
 import { WebSocketMonitor } from "../Monitors/WebSocketMonitor";
@@ -43,11 +46,15 @@ const MonitorFactories: readonly (readonly [
   ["Fetch", (context) => new FetchMonitor(context)],
   ["Xhr", (context) => new XhrMonitor(context)],
   ["WebSocket", (context) => new WebSocketMonitor(context)],
+  ["Channels", (context) => new ChannelMonitor(context)],
+  ["Channels", (context) => new ResourceMonitor(context)],
   ["Dom", (context) => new DomMonitor(context)],
   ["Csp", (context) => new CspMonitor(context)],
   ["Prototype", (context) => new PrototypeMonitor(context)],
   // Después de los monitores con tareas periódicas: sus timers usan el setTimeout original.
   ["Sinks", (context) => new SinkMonitor(context)],
+  // Al final: replica en los iframes los monitores ya configurados.
+  ["Realms", (context) => new RealmMonitor(context)],
 ];
 
 /**

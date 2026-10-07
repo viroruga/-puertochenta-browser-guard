@@ -24,15 +24,21 @@ export interface PatchHooks<T = undefined> {
     inspection: T,
   ) => void;
   TransformArgs?: (thisArg: unknown, args: readonly unknown[]) => unknown[] | null;
+  /**
+   * Se ejecuta después de la llamada original, con su resultado (que no puede cambiar).
+   * Si la llamada original lanza, no se ejecuta.
+   */
+  AfterApply?: (thisArg: unknown, result: unknown) => void;
   BeforeConstruct?: (args: readonly unknown[], stack: string | undefined) => void;
 }
 
 /**
  * Qué parte de la propiedad se intercepta:
  * - value: el valor (función o constructor), p. ej. window.fetch;
- * - setter: el setter de una propiedad accessor, p. ej. Element.prototype.innerHTML.
+ * - setter: el setter de una propiedad accessor, p. ej. Element.prototype.innerHTML;
+ * - getter: el getter de una propiedad accessor, p. ej. HTMLIFrameElement.prototype.contentWindow.
  */
-export type PatchPart = "value" | "setter";
+export type PatchPart = "value" | "setter" | "getter";
 
 /**
  * Estado mutable compartido con el proxy. Al restaurar se vacía, de modo que un
@@ -125,7 +131,14 @@ export class FunctionPatch<T = undefined> {
             state.Context?.ReportInternalError(error);
           }
         }
-        return Reflect.apply(original, thisArg, finalArgs);
+        const result: unknown = Reflect.apply(original, thisArg, finalArgs);
+        const after = state.Hooks?.AfterApply;
+        if (after) {
+          state.Context?.Safely(() => {
+            after(thisArg, result);
+          });
+        }
+        return result;
       },
       construct(original, args: unknown[], newTarget: (...args: unknown[]) => unknown): object {
         const hooks = state.Hooks;
@@ -208,10 +221,12 @@ export class FunctionPatch<T = undefined> {
    * - setter: el setter de una propiedad accessor configurable.
    */
   private ResolveTarget(descriptor: PropertyDescriptor): unknown {
-    if (this.Part === "setter") {
-      // El setter se envuelve con un Proxy y se invoca con Reflect.apply (con su `this`).
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      return descriptor.configurable === true ? descriptor.set : undefined;
+    if (this.Part !== "value") {
+      // Setter/getter se envuelven con un Proxy y se invocan con Reflect.apply (con su `this`).
+      /* eslint-disable @typescript-eslint/unbound-method */
+      const accessor = this.Part === "setter" ? descriptor.set : descriptor.get;
+      /* eslint-enable @typescript-eslint/unbound-method */
+      return descriptor.configurable === true ? accessor : undefined;
     }
     if (IsAccessor(descriptor)) {
       return descriptor.set === undefined ? undefined : Reflect.get(this.Owner, this.Key);
@@ -227,6 +242,8 @@ export class FunctionPatch<T = undefined> {
         ...descriptor,
         set: proxy as (value: unknown) => void,
       });
+    } else if (this.Part === "getter") {
+      Object.defineProperty(this.Owner, this.Key, { ...descriptor, get: proxy as () => unknown });
     } else if (IsAccessor(descriptor)) {
       Reflect.set(this.Owner, this.Key, proxy);
     } else {
@@ -236,11 +253,14 @@ export class FunctionPatch<T = undefined> {
 
   /** Valor instalado actualmente en la parte interceptada (para verificar y restaurar). */
   private ReadInstalled(): unknown {
-    return this.Part === "setter"
-      ? // Solo se compara por identidad con el proxy instalado.
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        Object.getOwnPropertyDescriptor(this.Owner, this.Key)?.set
-      : Reflect.get(this.Owner, this.Key);
+    if (this.Part === "value") {
+      return Reflect.get(this.Owner, this.Key);
+    }
+    // Solo se compara por identidad con el proxy instalado.
+    const descriptor = Object.getOwnPropertyDescriptor(this.Owner, this.Key);
+    /* eslint-disable @typescript-eslint/unbound-method */
+    return this.Part === "setter" ? descriptor?.set : descriptor?.get;
+    /* eslint-enable @typescript-eslint/unbound-method */
   }
 }
 

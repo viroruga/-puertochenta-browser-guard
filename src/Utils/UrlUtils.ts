@@ -151,6 +151,7 @@ export interface DescribedUrl {
   Origin: string | null;
   Scheme: string | null;
   HasQuery: boolean;
+  QueryLength: number;
 }
 
 /**
@@ -159,12 +160,13 @@ export interface DescribedUrl {
 export function DescribeUrl(raw: string, base: string): DescribedUrl {
   const url = ParseUrl(raw, base);
   if (!url) {
-    return { Url: "[invalid-url]", Origin: null, Scheme: null, HasQuery: false };
+    return { Url: "[invalid-url]", Origin: null, Scheme: null, HasQuery: false, QueryLength: 0 };
   }
   return {
     Url: SanitizeUrl(url),
     Origin: GetOrigin(url),
     Scheme: url.protocol,
     HasQuery: url.search !== "",
+    QueryLength: Math.max(0, url.search.length - 1),
   };
 }

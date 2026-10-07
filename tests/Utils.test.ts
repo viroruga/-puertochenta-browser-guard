@@ -27,6 +27,7 @@ describe("UrlUtils", () => {
       Origin: "https://api.example.com",
       Scheme: "https:",
       HasQuery: true,
+      QueryLength: 7,
     });
   });
 

@@ -14,6 +14,9 @@ test("violación CSP real del navegador", async ({ page }) => {
       Dom: false,
       Prototype: false,
       Runtime: false,
+      Sinks: false,
+      // La imagen bloqueada por CSP también aparece en Resource Timing (canal "resource").
+      Channels: false,
     },
   });
   await page.evaluate((origin) => {

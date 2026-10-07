@@ -30,6 +30,8 @@ function CreateBaseConfig(preset: GuardPreset): ResolvedConfig {
       Prototype: true,
       Runtime: true,
       Sinks: true,
+      Channels: true,
+      Realms: true,
     },
     Network: { AllowedOrigins: [], BlockedOrigins: [] },
     Dom: { AllowedScriptOrigins: [] },

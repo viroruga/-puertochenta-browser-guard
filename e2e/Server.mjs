@@ -71,7 +71,17 @@ async function ServeFile(pathname, response) {
   response.writeHead(404).end();
 }
 
-const server = createServer(async (request, response) => {
+const server = createServer((request, response) => {
+  // Un error en un handler nunca debe terminar el servidor: afectaría a todos los tests.
+  Handle(request, response).catch(() => {
+    if (!response.headersSent) {
+      response.writeHead(500);
+    }
+    response.end();
+  });
+});
+
+async function Handle(request, response) {
   const url = new URL(request.url ?? "/", "http://localhost");
   Cors(request, response);
 
@@ -85,7 +95,14 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (url.pathname === "/collect" && request.method === "POST") {
-    Collected.push(JSON.parse(await ReadBody(request)));
+    // Solo se guardan payloads JSON (envío remoto); otros cuerpos (p. ej. un beacon de
+    // prueba con texto) se aceptan sin guardarse.
+    const body = await ReadBody(request);
+    try {
+      Collected.push(JSON.parse(body));
+    } catch {
+      // Cuerpo no JSON: se ignora.
+    }
     response.writeHead(204).end();
     return;
   }
@@ -103,7 +120,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   await ServeFile(url.pathname, response);
-});
+}
 
 server.listen(Port, () => {
   console.log(`e2e server on http://localhost:${Port}`);

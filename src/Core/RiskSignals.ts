@@ -13,6 +13,9 @@ export const DefaultRiskWeights = {
   "network.blocked-origin": 90,
   "network.websocket": 10,
   "network.insecure-transport": 15,
+  "network.unknown-resource": 25,
+  "network.large-query": 25,
+  "network.service-worker": 25,
 
   // Scripts y elementos del DOM
   "script.dynamic": 5,
@@ -47,6 +50,7 @@ export const DefaultRiskWeights = {
   "runtime.removed": 40,
   "runtime.non-native": 20,
   "runtime.critical-target": 15,
+  "runtime.realm-access": 20,
 
   // Sinks de DOM XSS (contenido escrito en innerHTML, document.write, setTimeout("..."), ...)
   "xss.script-tag": 40,

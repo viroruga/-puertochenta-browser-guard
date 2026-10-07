@@ -87,6 +87,8 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
       Prototype: ResolveBoolean(monitors.Prototype, base.Monitors.Prototype),
       Runtime: ResolveBoolean(monitors.Runtime, base.Monitors.Runtime),
       Sinks: ResolveBoolean(monitors.Sinks, base.Monitors.Sinks),
+      Channels: ResolveBoolean(monitors.Channels, base.Monitors.Channels),
+      Realms: ResolveBoolean(monitors.Realms, base.Monitors.Realms),
     },
     Network: {
       AllowedOrigins: ResolveOrigins(config.Network?.AllowedOrigins),

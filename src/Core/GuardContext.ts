@@ -28,6 +28,10 @@ export type RequestHeaderProvider = (url: string | null) => readonly [string, st
  *   la detección y el reporte nunca se ejecuten dentro de la llamada de la aplicación;
  * - registrar las funciones creadas por BrowserGuard para no auto-detectarlas;
  * - contabilizar errores internos sin propagarlos.
+ *
+ * Un contexto hijo (CreateChild) observa otro realm (p. ej. un iframe del mismo origen)
+ * y delega en el principal: eventos, funciones propias, header de veredicto, sesión,
+ * URL de la página y errores.
  */
 export class GuardContext {
   private readonly OwnFunctions = new WeakSet();
@@ -38,26 +42,45 @@ export class GuardContext {
   private ErrorCount = 0;
   private HeaderProvider: RequestHeaderProvider | null = null;
 
-  /** Identificador aleatorio de esta sesión de BrowserGuard. */
-  public readonly SessionId = CreateSessionId();
+  /** Identificador aleatorio de esta sesión de BrowserGuard (compartido con los hijos). */
+  public readonly SessionId: string;
 
   public constructor(
     public readonly Config: ResolvedConfig,
     public readonly Window: Window & typeof globalThis,
     private readonly Dispatch: (event: AnySecurityEvent) => void,
-  ) {}
+    private readonly Parent: GuardContext | null = null,
+  ) {
+    this.SessionId = Parent?.SessionId ?? CreateSessionId();
+  }
 
-  /** URL actual de la página, usada como base para URLs relativas. */
+  /**
+   * Contexto para otro realm del mismo origen. Sus monitores reportan a este contexto.
+   */
+  public CreateChild(window: Window & typeof globalThis): GuardContext {
+    return new GuardContext(this.Config, window, this.Dispatch, this);
+  }
+
+  /**
+   * Base para resolver URLs relativas del realm observado (respeta <base href>; en un
+   * iframe about:blank es la del documento que lo creó).
+   */
   public GetBaseUrl(): string {
-    return this.Window.location.href;
+    const base = (this.Window.document as Document | undefined)?.baseURI;
+    return base && base !== "about:blank" ? base : this.GetPageUrl();
+  }
+
+  /** URL de la página principal (para detectar valores reflejados desde la URL). */
+  public GetPageUrl(): string {
+    return this.Parent ? this.Parent.GetPageUrl() : this.Window.location.href;
   }
 
   public GetPageOrigin(): string {
-    return this.Window.location.origin;
+    return this.Parent ? this.Parent.GetPageOrigin() : this.Window.location.origin;
   }
 
   public GetPageProtocol(): string {
-    return this.Window.location.protocol;
+    return this.Parent ? this.Parent.GetPageProtocol() : this.Window.location.protocol;
   }
 
   /**
@@ -70,6 +93,10 @@ export class GuardContext {
     stack?: string,
   ): void {
     if (!this.Active) {
+      return;
+    }
+    if (this.Parent) {
+      this.Parent.Emit(type, source, data, stack);
       return;
     }
     if (this.Pending.length >= MaxPendingEvents) {
@@ -120,6 +147,9 @@ export class GuardContext {
    * Header a agregar a una solicitud, o null. Nunca lanza.
    */
   public GetRequestHeader(url: string | null): readonly [string, string] | null {
+    if (this.Parent) {
+      return this.Active ? this.Parent.GetRequestHeader(url) : null;
+    }
     if (!this.Active || !this.HeaderProvider) {
       return null;
     }
@@ -132,10 +162,17 @@ export class GuardContext {
   }
 
   public RegisterOwnFunction(fn: object): void {
+    if (this.Parent) {
+      this.Parent.RegisterOwnFunction(fn);
+      return;
+    }
     this.OwnFunctions.add(fn);
   }
 
   public IsOwnFunction(value: unknown): boolean {
+    if (this.Parent) {
+      return this.Parent.IsOwnFunction(value);
+    }
     return typeof value === "function" || (typeof value === "object" && value !== null)
       ? this.OwnFunctions.has(value)
       : false;
@@ -144,7 +181,11 @@ export class GuardContext {
   /**
    * Registra un error interno. Nunca se propaga a la aplicación host.
    */
-  public ReportInternalError(_error: unknown): void {
+  public ReportInternalError(error: unknown): void {
+    if (this.Parent) {
+      this.Parent.ReportInternalError(error);
+      return;
+    }
     this.ErrorCount++;
   }
 

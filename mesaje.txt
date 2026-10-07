@@ -1,12 +1,15 @@
-feat: detect DOM XSS in dangerous sinks
+feat: observe exfiltration channels and close the clean-realm evasion
 
-- SinkMonitor observes innerHTML/outerHTML setters, insertAdjacentHTML,
-  document.write, createContextualFragment, iframe.srcdoc, setAttribute
-  (event handlers, javascript: URLs) and setTimeout/setInterval strings
-- XssSinkDetector scores written content by indicators: auto-firing
-  handlers, <script>, javascript: URLs, sensitive data access, PoC calls
-  and values reflected from the page URL (critical); content never stored
-- FunctionPatch: setter interception and cheap Inspect prefilter (no hook,
-  no stack for harmless calls); overhead ~0.5 µs per innerHTML write
-- eval/new Function intentionally not intercepted (language semantics)
-- Unit + real-browser e2e tests, demo buttons, docs (EN/ES), changeset
+- ChannelMonitor: sendBeacon, EventSource, window.open, form submissions
+  (submit event and form.submit) and serviceWorker.register
+- ResourceMonitor: resource downloads via PerformanceObserver (no API
+  patched); only the query length is recorded, long queries to unknown
+  origins raise the risk; equivalent network findings grouped for 10 s
+- RealmMonitor: installs network, channel and sink monitors in same-origin
+  iframe realms before contentWindow/contentDocument is returned, and on
+  iframe insertion (covers window.frames[i]); reports the access
+- SinkMonitor: javascript: URLs through href/src/action/formAction/data
+- FunctionPatch: getter interception and AfterApply hook;
+  GuardContext: child contexts for other realms
+- New toggles Monitors.Channels and Monitors.Realms (default on)
+- e2e on WebKit; hardened test server; docs (EN/ES); changeset

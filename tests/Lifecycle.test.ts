@@ -94,6 +94,8 @@ describe("Stop restaura el entorno completo", () => {
         Prototype: false,
         Runtime: false,
         Sinks: false,
+        Channels: false,
+        Realms: false,
       },
     });
     expect(guard.GetStatus().Monitors).toEqual([]);
@@ -104,7 +106,13 @@ describe("GuardContext", () => {
   it("descarta eventos ante una ráfaga para no crecer sin límite", () => {
     const dispatched: unknown[] = [];
     const context = new GuardContext(ResolveConfig(), window, (event) => dispatched.push(event));
-    const data = { Transport: "fetch", Url: "x", Origin: null, HasQuery: false } as const;
+    const data = {
+      Transport: "fetch",
+      Url: "x",
+      Origin: null,
+      HasQuery: false,
+      QueryLength: 0,
+    } as const;
     for (let i = 0; i < MaxPendingEvents + 5; i++) {
       context.Emit("network.request", "Test", data);
     }
@@ -142,6 +150,7 @@ describe("GuardContext", () => {
       Url: "x",
       Origin: null,
       HasQuery: false,
+      QueryLength: 0,
     });
     context.Flush();
     expect(dispatched).toHaveLength(0);

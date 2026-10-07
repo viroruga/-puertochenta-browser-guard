@@ -27,6 +27,18 @@ declare global {
       renderComment(html: string): HTMLDivElement;
       renderSearchFromUrl(): void;
       runLater(code: string): void;
+      leakWithImage(url: string): void;
+      leakWithBeacon(url: string): boolean;
+      submitFormTo(url: string): void;
+      openWindowTo(url: string): void;
+      openStream(url: string): void;
+      registerWorker(): Promise<unknown>;
+      fetchThroughFrame(url: string): Promise<unknown>;
+      fetchThroughFrameDocument(url: string): Promise<unknown>;
+      insertBlankFrame(): void;
+      fetchThroughFramesIndex(url: string): Promise<unknown>;
+      talkToCrossOriginFrame(url: string): Promise<boolean>;
+      setDangerousUrls(): void;
     };
   }
 }

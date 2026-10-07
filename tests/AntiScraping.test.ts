@@ -504,6 +504,8 @@ describe("Anti-scraping integrado", () => {
       Prototype: false,
       Runtime: false,
       Sinks: false,
+      Channels: false,
+      Realms: false,
     },
   } as const;
 

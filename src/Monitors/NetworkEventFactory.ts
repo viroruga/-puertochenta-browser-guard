@@ -30,11 +30,11 @@ export function CreateNetworkRequestData(
   context: GuardContext,
   transport: NetworkTransport,
   rawUrl: string | null,
-  extras: { Method?: string; Protocols?: string[] } = {},
+  extras: { Method?: string; Protocols?: string[]; InitiatorType?: string } = {},
 ): NetworkRequestData {
   const described =
     rawUrl === null
-      ? { Url: "[unknown]", Origin: null, HasQuery: false }
+      ? { Url: "[unknown]", Origin: null, HasQuery: false, QueryLength: 0 }
       : DescribeUrl(rawUrl, context.GetBaseUrl());
 
   const data: NetworkRequestData = {
@@ -42,12 +42,16 @@ export function CreateNetworkRequestData(
     Url: described.Url,
     Origin: described.Origin,
     HasQuery: described.HasQuery,
+    QueryLength: described.QueryLength,
   };
   if (extras.Method !== undefined) {
     data.Method = extras.Method.toUpperCase();
   }
   if (extras.Protocols !== undefined) {
     data.Protocols = extras.Protocols;
+  }
+  if (extras.InitiatorType !== undefined) {
+    data.InitiatorType = extras.InitiatorType;
   }
   return data;
 }

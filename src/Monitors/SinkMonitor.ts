@@ -67,6 +67,30 @@ function CodeString(): SinkSpec["Analyze"] {
 const OnElement = (window: SinkWindow): object => window.Element.prototype;
 
 /**
+ * Propiedad URL de un elemento donde "javascript:" ejecuta código (a.href = ..., etc.).
+ */
+function UrlProperty(sink: SinkName, constructorName: string, attribute: string): SinkSpec {
+  return {
+    Sink: sink,
+    Owner: (window) =>
+      (window as unknown as Record<string, { prototype?: object } | undefined>)[constructorName]
+        ?.prototype,
+    Key: sink,
+    Part: "setter",
+    Analyze: (thisArg, args, pageHref) => {
+      const value = args[0];
+      if (typeof value !== "string") {
+        return null;
+      }
+      const indicators = AnalyzeAttribute(attribute, value, pageHref);
+      return indicators
+        ? { Indicators: indicators, Target: TagOf(thisArg), Length: value.length }
+        : null;
+    },
+  };
+}
+
+/**
  * Sinks observados. eval y new Function se omiten a propósito: interceptarlos rompería
  * la semántica de eval directo (acceso al ámbito local) y la identidad de Function.
  * Sus usos quedan cubiertos por CSP (unsafe-eval) y por RuntimeMonitor.
@@ -146,6 +170,14 @@ export const SinkSpecs: readonly SinkSpec[] = [
         : null;
     },
   },
+  UrlProperty("href", "HTMLAnchorElement", "href"),
+  UrlProperty("href", "HTMLAreaElement", "href"),
+  UrlProperty("src", "HTMLIFrameElement", "src"),
+  UrlProperty("src", "HTMLEmbedElement", "src"),
+  UrlProperty("data", "HTMLObjectElement", "data"),
+  UrlProperty("action", "HTMLFormElement", "action"),
+  UrlProperty("formAction", "HTMLButtonElement", "formaction"),
+  UrlProperty("formAction", "HTMLInputElement", "formaction"),
   ...(["setTimeout", "setInterval"] as const).map((key): SinkSpec => ({
     Sink: key,
     Owner: (window) => window,
@@ -171,7 +203,7 @@ export class SinkMonitor extends BaseMonitor {
   private Patches: FunctionPatch<SinkData>[] = [];
   private readonly Recent = new Map<string, number>();
   /** Lectura perezosa de la URL: solo se consulta si ya se encontraron indicadores. */
-  private readonly ReadHref = (): string => this.Context.GetBaseUrl();
+  private readonly ReadHref = (): string => this.Context.GetPageUrl();
 
   protected OnStart(): boolean {
     const window = this.Context.Window;
