@@ -29,6 +29,7 @@ function CreateBaseConfig(preset: GuardPreset): ResolvedConfig {
       Csp: true,
       Prototype: true,
       Runtime: true,
+      Sinks: true,
     },
     Network: { AllowedOrigins: [], BlockedOrigins: [] },
     Dom: { AllowedScriptOrigins: [] },

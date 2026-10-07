@@ -93,6 +93,7 @@ describe("Stop restaura el entorno completo", () => {
         Csp: false,
         Prototype: false,
         Runtime: false,
+        Sinks: false,
       },
     });
     expect(guard.GetStatus().Monitors).toEqual([]);

@@ -10,6 +10,7 @@ export type FindingCategory =
   | "runtime-integrity"
   | "csp"
   | "dom"
+  | "xss"
   | "bot";
 
 /**

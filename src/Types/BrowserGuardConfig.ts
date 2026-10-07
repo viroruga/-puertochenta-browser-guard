@@ -156,6 +156,8 @@ export interface MonitorToggles {
   Prototype?: boolean;
   /** Verificación periódica de funciones críticas del runtime. */
   Runtime?: boolean;
+  /** Sinks de DOM XSS: innerHTML, document.write, setTimeout("..."), setAttribute("on..."). */
+  Sinks?: boolean;
 }
 
 /**

@@ -217,9 +217,12 @@ describe("DomMonitor integrado", () => {
     document.body.appendChild(container);
     await WaitForObserver();
 
+    // El innerHTML también genera un hallazgo "xss" (contenido embebido): aquí se
+    // verifican solo los elementos insertados que reporta DomMonitor.
     const tags = guard
       .GetReport()
-      .Findings.map((finding) => (finding.Evidence as DomElementData).TagName);
+      .Findings.filter((finding) => finding.Category === "dom")
+      .map((finding) => (finding.Evidence as DomElementData).TagName);
     expect(tags).toEqual(["iframe", "embed"]);
   });
 

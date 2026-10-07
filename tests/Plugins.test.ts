@@ -14,6 +14,7 @@ const Quiet = {
     Csp: false,
     Prototype: false,
     Runtime: false,
+    Sinks: false,
   },
 } as const;
 

@@ -154,6 +154,32 @@ export interface BotActivityData {
 }
 
 /**
+ * Sinks de DOM XSS observados.
+ */
+export type SinkName =
+  | "innerHTML"
+  | "outerHTML"
+  | "insertAdjacentHTML"
+  | "document.write"
+  | "createContextualFragment"
+  | "srcdoc"
+  | "setAttribute"
+  | "setTimeout"
+  | "setInterval";
+
+/**
+ * Escritura de contenido con indicadores de riesgo en un sink peligroso.
+ * Nunca incluye el contenido: solo el sink, el elemento, la longitud y los indicadores.
+ */
+export interface SinkData {
+  Sink: SinkName;
+  /** Etiqueta del elemento afectado (o del atributo, para setAttribute). */
+  Target: string | null;
+  Length: number;
+  Indicators: string[];
+}
+
+/**
  * Mapa de tipos de evento a su payload. Permite un EventBus tipado.
  */
 export interface SecurityEventDataMap {
@@ -164,6 +190,7 @@ export interface SecurityEventDataMap {
   "runtime.modified": RuntimeModificationData;
   "bot.environment": BotEnvironmentData;
   "bot.activity": BotActivityData;
+  "dom.sink": SinkData;
 }
 
 export type SecurityEventType = keyof SecurityEventDataMap;

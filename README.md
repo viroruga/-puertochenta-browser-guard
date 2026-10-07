@@ -63,7 +63,8 @@ observe → analyze → score → report
 BrowserGuard:
 
 - observes `fetch`, `XMLHttpRequest`, `WebSocket`, insertion of `<script>`, `<iframe>`,
-  `<object>` and `<embed>`, CSP violations, native prototypes and critical runtime functions;
+  `<object>` and `<embed>`, DOM XSS sinks (`innerHTML`, `document.write`, ...), CSP violations,
+  native prototypes and critical runtime functions;
 - analyzes those events with specialized detectors;
 - assigns a risk score and a severity (`info`, `low`, `medium`, `high`, `critical`);
 - reports through events your application can subscribe to (for example, to forward them to
@@ -163,6 +164,7 @@ interface SecurityFinding {
     | "runtime-integrity"
     | "csp"
     | "dom"
+    | "xss"
     | "bot";
   Severity: "info" | "low" | "medium" | "high" | "critical";
   Title: string;
@@ -204,6 +206,7 @@ interface BrowserGuardConfig {
     Csp?: boolean;
     Prototype?: boolean;
     Runtime?: boolean; // integrity of critical functions
+    Sinks?: boolean; // DOM XSS sinks: innerHTML, document.write, setTimeout("..."), ...
   };
 
   Network?: {
@@ -262,17 +265,19 @@ the default mode; the threshold in parentheses applies if you choose `Console: "
 
 Monitors **only observe and emit events**; they never decide whether something is an attack.
 
-| Monitor              | Observes                                                                                                                                                            | Records                                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchMonitor`       | `window.fetch`                                                                                                                                                      | sanitized URL, method, origin, timestamp, stack                                                                                          |
-| `XhrMonitor`         | `XMLHttpRequest.prototype.open` / `send`                                                                                                                            | method, sanitized URL, origin, timestamp, stack (on send)                                                                                |
-| `WebSocketMonitor`   | `new WebSocket()`                                                                                                                                                   | sanitized URL, origin, protocols, stack. Messages are not inspected.                                                                     |
-| `DomMonitor`         | `MutationObserver` (childList + subtree)                                                                                                                            | inserted `script`, `iframe`, `object`, `embed`: `src`, `type`, `async`, `defer`, `integrity`, `crossOrigin`; for inline, only the length |
-| `CspMonitor`         | `securitypolicyviolation` event                                                                                                                                     | `blockedURI`, `violatedDirective`, `effectiveDirective`, `sourceFile`, `lineNumber`, `columnNumber`, `disposition`                       |
-| `PrototypeMonitor`   | `Object`, `Array`, `Function`, `String`, `Promise` `.prototype`                                                                                                     | added, removed or modified property descriptors                                                                                          |
-| `RuntimeMonitor`     | `fetch`, `XHR.open/send`, `WebSocket`, `setTimeout`, `setInterval`, `eval`, `Function`, `Element.prototype.appendChild/setAttribute`, `Function.prototype.toString` | replacement, removal or tampering before start                                                                                           |
-| `AutomationMonitor`  | automation and environment traces (only with `AntiScraping`)                                                                                                        | signal names, never values                                                                                                               |
-| `InteractionMonitor` | mouse, keyboard, scroll, touch (only with `AntiScraping`)                                                                                                           | counters per event type and synthetic events; never keys or coordinates                                                                  |
+| Monitor              | Observes                                                                                                                                                                                                                                   | Records                                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchMonitor`       | `window.fetch`                                                                                                                                                                                                                             | sanitized URL, method, origin, timestamp, stack                                                                                          |
+| `XhrMonitor`         | `XMLHttpRequest.prototype.open` / `send`                                                                                                                                                                                                   | method, sanitized URL, origin, timestamp, stack (on send)                                                                                |
+| `WebSocketMonitor`   | `new WebSocket()`                                                                                                                                                                                                                          | sanitized URL, origin, protocols, stack. Messages are not inspected.                                                                     |
+| `DomMonitor`         | `MutationObserver` (childList + subtree)                                                                                                                                                                                                   | inserted `script`, `iframe`, `object`, `embed`: `src`, `type`, `async`, `defer`, `integrity`, `crossOrigin`; for inline, only the length |
+| DOM XSS sinks        | A cheap prefilter skips harmless writes without running the detailed analysis, capturing a stack or reading `location`. Measured overhead per harmless call (Chrome / Firefox): `innerHTML` +0.5 / +0.7 µs, `setAttribute` +0.2 / +0.3 µs. |
+| `CspMonitor`         | `securitypolicyviolation` event                                                                                                                                                                                                            | `blockedURI`, `violatedDirective`, `effectiveDirective`, `sourceFile`, `lineNumber`, `columnNumber`, `disposition`                       |
+| `PrototypeMonitor`   | `Object`, `Array`, `Function`, `String`, `Promise` `.prototype`                                                                                                                                                                            | added, removed or modified property descriptors                                                                                          |
+| `RuntimeMonitor`     | `fetch`, `XHR.open/send`, `WebSocket`, `setTimeout`, `setInterval`, `eval`, `Function`, `Element.prototype.appendChild/setAttribute`, `Function.prototype.toString`                                                                        | replacement, removal or tampering before start                                                                                           |
+| `SinkMonitor`        | `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`, `document.write`, `createContextualFragment`, `srcdoc`, `setAttribute`, `setTimeout`/`setInterval` with a string                                                                    | sink, element, length and indicator names (never the content), stack                                                                     |
+| `AutomationMonitor`  | automation and environment traces (only with `AntiScraping`)                                                                                                                                                                               | signal names, never values                                                                                                               |
+| `InteractionMonitor` | mouse, keyboard, scroll, touch (only with `AntiScraping`)                                                                                                                                                                                  | counters per event type and synthetic events; never keys or coordinates                                                                  |
 
 **Transparent interception.** `fetch`, `XHR` and `WebSocket` are intercepted with a `Proxy`,
 which preserves arguments, `this`, the Promise, the return value, errors, `name`, `length`,
@@ -349,6 +354,41 @@ source obtained through a **captured** `toString` reference (immune to later rep
 presence of an own `toString` (a hiding technique), an unexpected `prototype`, a matching `name`,
 and reference comparison against the baseline.
 
+### XssSinkDetector (DOM XSS)
+
+`SinkMonitor` observes the APIs that turn a string into HTML or code: the `innerHTML` and
+`outerHTML` setters (on elements and shadow roots), `insertAdjacentHTML`, `document.write` /
+`writeln`, `Range.createContextualFragment`, `iframe.srcdoc`, `setAttribute` (event handlers and
+`javascript:` URLs) and `setTimeout` / `setInterval` called with a **string**.
+
+Writing HTML is normal, so only content with **indicators** is reported:
+
+| Indicator                                                                    | Weight |
+| ---------------------------------------------------------------------------- | ------ |
+| Handler that runs without interaction (`onerror`, `onload`, `onfocus`, ...)  | 50     |
+| Value taken from the page URL (query or hash) written to the sink            | 45     |
+| `javascript:` URL (also entity-encoded; `javascript:void(0)` is ignored)     | 45     |
+| `<script>` element                                                           | 40     |
+| Inline handler that needs interaction (`onclick`, ...)                       | 30     |
+| Code passed as a string to `setTimeout` / `setInterval`                      | 30     |
+| Access to sensitive data or obfuscation (`document.cookie`, storage, `atob`) | 30     |
+| Proof-of-concept call (`alert(`, `prompt(`, `confirm(`)                      | 25     |
+| Embedded content (`iframe`, `object`, `embed`, `base`, `srcdoc`)             | 20     |
+| `document.write` (legacy sink)                                               | +10    |
+
+Examples: `<button onclick="save()">` → low; `<img src=x onerror=alert(1)>` → high; the same
+payload taken from `?q=` in the URL (DOM-based reflected XSS) → critical.
+
+Only the sink, the element, the length and the indicator names are recorded — **never the
+content**. Identical writes are grouped for 10 seconds so a render loop cannot flood the
+history.
+
+> **Not intercepted on purpose: `eval` and `new Function`.** Replacing `eval` changes language
+> semantics (a _direct_ `eval` only sees local variables when it is the original function), and
+> replacing `Function` breaks checks such as `fn.constructor === Function`. That would alter the
+> application. Their use is still visible through CSP `unsafe-eval` violations and
+> `RuntimeMonitor`; full coverage is planned with Trusted Types (v0.3).
+
 ### Custom weights
 
 ```ts
@@ -370,7 +410,10 @@ Available signals: `network.unknown-origin`, `network.blocked-origin`, `network.
 `csp.blocked-origin`, `prototype.added`, `prototype.removed`, `prototype.modified`,
 `prototype.suspicious-key`, `prototype.object-root`, `prototype.native-overridden`,
 `runtime.modified`, `runtime.preexisting`, `runtime.removed`, `runtime.non-native`,
-`runtime.critical-target`, and the `bot.*` signals listed in [Anti-scraping](#signals).
+`runtime.critical-target`, `xss.auto-event-handler`, `xss.event-handler`, `xss.script-tag`,
+`xss.javascript-url`, `xss.embedded-content`, `xss.sensitive-access`, `xss.probe`,
+`xss.url-reflected`, `xss.string-code`, `xss.legacy-sink`, and the `bot.*` signals listed in
+[Anti-scraping](#signals).
 
 ## Events
 
@@ -615,7 +658,7 @@ BrowserGuard.Start({
 
 | Plugin            | Entry point                                 | Adds (min+gzip) |
 | ----------------- | ------------------------------------------- | --------------- |
-| core              | `@puertochenta/browser-guard`               | 13.3 KB         |
+| core              | `@puertochenta/browser-guard`               | 15.7 KB         |
 | `AntiScraping`    | `@puertochenta/browser-guard/anti-scraping` | +4.2 KB         |
 | `RemoteReporting` | `@puertochenta/browser-guard/remote`        | +2.0 KB         |
 
@@ -882,9 +925,13 @@ interface AntiScrapingConfig {
 - **Periodic checks.** Prototype and critical-function changes are detected on the next check
   cycle (2-5 s depending on the preset), not instantly. A change reverted before the next cycle
   can go unnoticed.
-- **DOM.** Element insertions are observed, attribute changes are not: changing the `src` of an
-  existing script or assigning `innerHTML` with inline handlers is not detected (planned for
-  v0.2). DOM events carry no stack trace (the `MutationObserver` callback is asynchronous).
+- **DOM.** Changing the `src` of an existing script is not detected (attribute changes are not
+  observed, except through `setAttribute`). Assigning attributes as properties
+  (`img.onerror = ...`, `a.href = "javascript:..."`) is not observed either. Element insertion
+  events carry no stack trace (the `MutationObserver` callback is asynchronous); sink findings do.
+- **DOM XSS.** Detection is based on indicators, not on full taint tracking: an encoded or
+  transformed payload may not be recognized as reflected, and `eval` / `new Function` are not
+  intercepted (see [XssSinkDetector](#xsssinkdetector-dom-xss)).
 - **False positives.** Observability libraries (Sentry, Datadog, zone.js) legitimately wrap
   `fetch`/XHR and may be reported as `runtime-integrity`. Polyfills extending prototypes are
   reported as `low`. Use `AllowedOrigins`, presets and `Risk.Weights` to tune this.
@@ -937,8 +984,8 @@ Decisions with a performance impact:
 
 Reference measurement (Chrome, this repository's demo): the overhead per intercepted `fetch`
 call is about **50 µs**, dominated by stack trace capture; on `XMLHttpRequest.open` it is
-negligible. Bundle size for an application that imports only the core: ~41 KB minified,
-~13 KB gzip, with no dependencies; each plugin adds its own size (see [Plugins](#plugins)).
+negligible. Bundle size for an application that imports only the core: ~49 KB minified,
+~16 KB gzip, with no dependencies; each plugin adds its own size (see [Plugins](#plugins)).
 In production bundles (library and app in the same file) stack traces still point to your code:
 internal frames are dropped by position, not by file name.
 
@@ -1037,8 +1084,8 @@ from a local machine.
 Included in 0.1.0: network, DOM, CSP, prototype and runtime integrity monitors; plugin system;
 `RemoteReporting` and `AntiScraping` plugins; custom reporters (`Reporters`).
 
-- **v0.2:** DOM XSS detection and dangerous sinks: `innerHTML`, `outerHTML`, `document.write`,
-  `eval`, `Function`.
+- **v0.2:** DOM XSS detection in dangerous sinks: `innerHTML`, `outerHTML`, `document.write`,
+  `insertAdjacentHTML`, `setAttribute`, string timers (✅ available: `SinkMonitor`).
 - **v0.3:** Trusted Types integration.
 - **v0.4:** Subresource Integrity analysis and supply-chain monitoring.
 - **v0.5:** advanced forensic timeline.

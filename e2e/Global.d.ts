@@ -15,6 +15,8 @@ declare global {
       open: XMLHttpRequest["open"];
       send: XMLHttpRequest["send"];
       WebSocket: typeof WebSocket;
+      innerHTMLSetter: (value: string) => void;
+      setTimeout: typeof setTimeout;
     };
     App: {
       submitPayment(url: string): Promise<unknown>;
@@ -22,6 +24,9 @@ declare global {
       openSocket(url: string): WebSocket;
       injectScript(src: string): void;
       loadExternalImage(src: string): void;
+      renderComment(html: string): HTMLDivElement;
+      renderSearchFromUrl(): void;
+      runLater(code: string): void;
     };
   }
 }

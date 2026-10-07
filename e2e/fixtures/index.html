@@ -10,6 +10,8 @@
         open: XMLHttpRequest.prototype.open,
         send: XMLHttpRequest.prototype.send,
         WebSocket: window.WebSocket,
+        innerHTMLSetter: Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML").set,
+        setTimeout: window.setTimeout,
       };
     </script>
     <script src="/fixtures/app.js"></script>

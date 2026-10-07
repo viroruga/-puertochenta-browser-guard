@@ -63,6 +63,19 @@ export const Simulations: Record<string, () => void> = {
     } as typeof window.setTimeout;
   },
 
+  "xss-innerhtml": () => {
+    // Payload clásico; el src inválido dispara onerror, que solo escribe en consola.
+    const container = document.createElement("div");
+    container.innerHTML = `<img src="x" onerror="console.info('XSS payload executed')">`;
+    document.body.appendChild(container);
+    container.remove();
+  },
+
+  "xss-timer": () => {
+    // Código como string (equivalente a eval): inofensivo, pero el patrón es un sink.
+    setTimeout("console.info('string timer executed, cookies:', document.cookie.length)", 0);
+  },
+
   crawler: () => {
     // Barrido secuencial de ids, típico de un scraper que recorre un catálogo.
     void (async () => {

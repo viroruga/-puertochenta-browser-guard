@@ -3,11 +3,13 @@ import { NetworkDetector } from "../Detectors/NetworkDetector";
 import { PrototypePollutionDetector } from "../Detectors/PrototypePollutionDetector";
 import { RuntimeIntegrityDetector } from "../Detectors/RuntimeIntegrityDetector";
 import { ScriptInjectionDetector } from "../Detectors/ScriptInjectionDetector";
+import { XssSinkDetector } from "../Detectors/XssSinkDetector";
 import { CspMonitor } from "../Monitors/CspMonitor";
 import { DomMonitor } from "../Monitors/DomMonitor";
 import { FetchMonitor } from "../Monitors/FetchMonitor";
 import { PrototypeMonitor } from "../Monitors/PrototypeMonitor";
 import { RuntimeMonitor } from "../Monitors/RuntimeMonitor";
+import { SinkMonitor } from "../Monitors/SinkMonitor";
 import { WebSocketMonitor } from "../Monitors/WebSocketMonitor";
 import { XhrMonitor } from "../Monitors/XhrMonitor";
 import { ConsoleReporter } from "../Reporters/ConsoleReporter";
@@ -44,6 +46,8 @@ const MonitorFactories: readonly (readonly [
   ["Dom", (context) => new DomMonitor(context)],
   ["Csp", (context) => new CspMonitor(context)],
   ["Prototype", (context) => new PrototypeMonitor(context)],
+  // Después de los monitores con tareas periódicas: sus timers usan el setTimeout original.
+  ["Sinks", (context) => new SinkMonitor(context)],
 ];
 
 /**
@@ -66,6 +70,7 @@ export function CreateDetectors(config: ResolvedConfig, page: PageInfo): Detecto
     new CspViolationDetector(config),
     new PrototypePollutionDetector(),
     new RuntimeIntegrityDetector(),
+    new XssSinkDetector(),
   ];
 }
 

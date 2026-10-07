@@ -30,4 +30,33 @@ function loadExternalImage(src) {
   image.src = src;
 }
 
-window.App = { submitPayment, sendLegacyRequest, openSocket, injectScript, loadExternalImage };
+// Sinks de DOM XSS: patrones vulnerables típicos.
+function renderComment(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  return container;
+}
+
+function renderSearchFromUrl() {
+  // Vulnerable a propósito: escribe en innerHTML un valor tomado de la URL.
+  const query = new URLSearchParams(location.search).get("q") ?? "";
+  const container = document.createElement("div");
+  container.innerHTML = `Results for ${query}`;
+  document.body.appendChild(container);
+}
+
+function runLater(code) {
+  setTimeout(code, 0);
+}
+
+window.App = {
+  submitPayment,
+  sendLegacyRequest,
+  openSocket,
+  injectScript,
+  loadExternalImage,
+  renderComment,
+  renderSearchFromUrl,
+  runLater,
+};

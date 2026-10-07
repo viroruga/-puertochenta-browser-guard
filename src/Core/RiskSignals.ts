@@ -48,6 +48,18 @@ export const DefaultRiskWeights = {
   "runtime.non-native": 20,
   "runtime.critical-target": 15,
 
+  // Sinks de DOM XSS (contenido escrito en innerHTML, document.write, setTimeout("..."), ...)
+  "xss.script-tag": 40,
+  "xss.auto-event-handler": 50,
+  "xss.event-handler": 30,
+  "xss.javascript-url": 45,
+  "xss.embedded-content": 20,
+  "xss.sensitive-access": 30,
+  "xss.probe": 25,
+  "xss.url-reflected": 45,
+  "xss.string-code": 30,
+  "xss.legacy-sink": 10,
+
   // Bots y scraping (alimentan además el veredicto de sesión de BotSession)
   "bot.webdriver": 80,
   "bot.headless": 70,
