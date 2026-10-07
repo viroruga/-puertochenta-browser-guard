@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@puertochenta/browser-guard": ["../../src/Index.ts"],
+      "@puertochenta/browser-guard/anti-scraping": ["../../src/Plugins/AntiScrapingPlugin.ts"],
+      "@puertochenta/browser-guard/remote": ["../../src/Plugins/RemoteReportingPlugin.ts"]
+    }
+  },
+  "include": ["src"]
+}

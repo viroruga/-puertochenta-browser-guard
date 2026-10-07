@@ -1,0 +1,26 @@
+feat: initial release of browser-guard 0.1.0
+
+Client-side runtime security library: observes the browser runtime,
+detects suspicious behavior, scores risk (0-100) and reports locally.
+
+Core
+- Monitors: fetch, XHR, WebSocket (Proxy-based, exact restore on Stop),
+  DOM insertions, CSP violations, native prototypes, runtime integrity
+- Detectors with named signals and configurable weights; RiskEngine
+- Presets: development, balanced, strict, forensic (bounded timeline)
+- Console modes: notice (default in production), findings, silent
+- Privacy by design: sanitized URLs and evidence, no fingerprinting
+- Stack traces point to app code, also in production bundles
+- SSR-safe import
+
+Plugins (separate entry points, core ~13 KB gzip)
+- @puertochenta/browser-guard/anti-scraping: bot detection, session
+  verdict, protected content removal, verdict header for the backend
+- @puertochenta/browser-guard/remote: batched reporting with retries
+
+Tooling
+- Unit tests (Vitest/jsdom), e2e in real Chromium and Firefox
+  (Playwright), packed-tarball type check (Bundler/NodeNext/Node10)
+- CI, changesets release with npm provenance, Dependabot
+- Examples: Vite demo and dependency-free collector
+- README (EN/ES), CHANGELOG, SECURITY, MIT license

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP mínima para poder demostrar violaciones: solo restringe imágenes,
+      por lo que no interfiere con el servidor de desarrollo de Vite.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="img-src 'self' data:" />
+    <title>BrowserGuard Demo</title>
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <h1>BrowserGuard demo</h1>
+        <p>
+          Each button triggers a controlled, harmless behavior. The browser console only shows the
+          monitoring notice (what end users see); the findings below are what the site owner
+          receives through <code>Guard.On()</code>.
+        </p>
+        <p class="status" id="status"></p>
+      </header>
+
+      <section class="actions">
+        <h2>Network</h2>
+        <button data-action="allowed-fetch">Allowed fetch (same origin)</button>
+        <button data-action="external-fetch">Simulate external request</button>
+        <button data-action="blocked-fetch">Request to blocked origin</button>
+        <button data-action="websocket">Open WebSocket</button>
+
+        <h2>DOM &amp; CSP</h2>
+        <button data-action="dynamic-script">Simulate dynamic script</button>
+        <button data-action="inline-script">Simulate inline script</button>
+        <button data-action="csp">Trigger CSP violation</button>
+
+        <h2>Runtime</h2>
+        <button data-action="prototype">Simulate prototype change</button>
+        <button data-action="runtime">Simulate runtime modification</button>
+        <button data-action="cleanup" class="secondary">Undo runtime changes</button>
+
+        <h2>Anti-scraping</h2>
+        <button data-action="catalog">Load catalog from API</button>
+        <button data-action="crawler">Simulate crawler (sequential ids)</button>
+        <button data-action="synthetic">Simulate synthetic clicks</button>
+
+        <h2>Guard</h2>
+        <button data-action="toggle" class="secondary">Stop / Start</button>
+        <button data-action="clear" class="secondary">Clear list</button>
+      </section>
+
+      <section class="findings">
+        <h2>Protected content <span id="verdict" class="verdict"></span></h2>
+        <div class="protected" data-guard-protect>
+          <strong>Precio mayorista:</strong> $1.249,00 · <strong>Stock:</strong> 312 unidades ·
+          <strong>Proveedor:</strong> Acme Industrial S.A.
+        </div>
+        <pre id="catalog" class="catalog">Catalog API: not requested yet.</pre>
+
+        <h2>Findings <span id="counter"></span></h2>
+        <ol id="findings"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

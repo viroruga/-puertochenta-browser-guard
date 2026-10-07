@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+*.log
+.DS_Store
+playwright-report
+test-results
+blob-report
+examples/collector/data
+e2e/fixtures/generated

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BrowserGuard e2e</title>
+    <script>
+      // Referencias originales, guardadas antes de cargar BrowserGuard.
+      window.Originals = {
+        fetch: window.fetch,
+        open: XMLHttpRequest.prototype.open,
+        send: XMLHttpRequest.prototype.send,
+        WebSocket: window.WebSocket,
+      };
+    </script>
+    <script src="/fixtures/app.js"></script>
+    <script type="module">
+      import { BrowserGuard } from "/dist/index.js";
+      import { AntiScraping } from "/dist/anti-scraping.js";
+      import { RemoteReporting } from "/dist/remote.js";
+      window.BrowserGuard = BrowserGuard;
+      window.Plugins = { AntiScraping, RemoteReporting };
+      window.dispatchEvent(new Event("guard-ready"));
+    </script>
+  </head>
+  <body>
+    <div id="protected" data-guard-protect>Wholesale price: $1,249.00</div>
+  </body>
+</html>

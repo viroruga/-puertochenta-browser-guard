@@ -1,0 +1,9 @@
+{
+  // Tests end-to-end: se ejecutan en Node (Playwright) además del navegador,
+  // por eso incluyen los tipos de Node, que no deben mezclarse con los de src/.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

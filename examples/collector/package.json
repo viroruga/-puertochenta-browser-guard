@@ -1,0 +1,10 @@
+{
+  "name": "browser-guard-collector",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Example endpoint that receives BrowserGuard findings (Remote.Endpoint).",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
