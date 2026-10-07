@@ -1,7 +1,7 @@
 import type { RemoteMetadataValue, ResolvedRemoteConfig } from "../Types/BrowserGuardConfig";
-import { ParseUrl } from "../Utils/UrlUtils";
 import {
   ClampInteger,
+  ResolveEndpoint,
   IsPlainObject,
   IsValidHeaderName,
   ResolveBoolean,
@@ -20,31 +20,6 @@ export const RemoteLimits = {
   MaxMetadataKeys: 20,
   MaxMetadataLength: 200,
 } as const;
-
-const LocalHosts: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
-/**
- * Valida el endpoint. Solo se aceptan destinos que no expongan los hallazgos en
- * texto plano por la red: https, el mismo origen que la página, o localhost.
- */
-export function ResolveEndpoint(value: unknown, pageHref?: string): string | null {
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
-  const url = ParseUrl(value.trim(), pageHref);
-  if (!url || url.username !== "" || url.password !== "") {
-    return null;
-  }
-  const pageOrigin = pageHref ? ParseUrl(pageHref)?.origin : undefined;
-  const isSecure = url.protocol === "https:";
-  const isSameOrigin = pageOrigin !== undefined && url.origin === pageOrigin;
-  const isLocal = url.protocol === "http:" && LocalHosts.has(url.hostname);
-  if (!isSecure && !isSameOrigin && !isLocal) {
-    return null;
-  }
-  url.hash = "";
-  return url.href;
-}
 
 function ResolveHeaders(value: unknown): Record<string, string> {
   const headers: Record<string, string> = {};

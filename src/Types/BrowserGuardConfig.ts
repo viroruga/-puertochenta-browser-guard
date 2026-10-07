@@ -112,6 +112,15 @@ export interface AntiScrapingConfig {
   ProtectAt?: "suspicious" | "bot";
   /** Texto que reemplaza al contenido protegido. */
   Placeholder?: string;
+  /**
+   * Desafío verificable en el servidor: BrowserGuard obtiene un desafío firmado de
+   * Endpoint, resuelve una prueba de trabajo y la agrega al header de veredicto. Tu
+   * backend la verifica con VerifyRequest() de "@puertochenta/browser-guard/server".
+   * Endpoint debe ser https, del mismo origen o localhost.
+   */
+  Challenge?: {
+    Endpoint: string;
+  };
   /** Header con el veredicto agregado a las solicitudes (fetch y XHR). */
   VerdictHeader?: {
     /** Por defecto: true. */
@@ -142,6 +151,8 @@ export interface ResolvedAntiScrapingConfig {
   ProtectAt: "suspicious" | "bot";
   Placeholder: string;
   VerdictHeader: { Enabled: boolean; Name: string; Origins: string[] };
+  /** null si no se configuró un desafío o el endpoint no es válido. */
+  Challenge: { Endpoint: string } | null;
 }
 
 /**

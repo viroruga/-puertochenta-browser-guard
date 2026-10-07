@@ -3,6 +3,7 @@ import {
   ClampInteger,
   IsPlainObject,
   IsValidHeaderName,
+  ResolveEndpoint,
   ResolveBoolean,
   ResolveOrigins,
 } from "./ConfigValidators";
@@ -36,7 +37,10 @@ function ResolveSelector(value: unknown): string {
  * Resuelve la configuración del plugin AntiScraping. Retorna null si se desactivó
  * explícitamente con Enabled: false.
  */
-export function ResolveAntiScrapingConfig(input: unknown = {}): ResolvedAntiScrapingConfig | null {
+export function ResolveAntiScrapingConfig(
+  input: unknown = {},
+  pageHref: string | undefined = (globalThis as { location?: Location }).location?.href,
+): ResolvedAntiScrapingConfig | null {
   const value = IsPlainObject(input) ? input : {};
   if (value.Enabled === false) {
     return null;
@@ -79,5 +83,20 @@ export function ResolveAntiScrapingConfig(input: unknown = {}): ResolvedAntiScra
       Name: headerName,
       Origins: ResolveOrigins(header.Origins),
     },
+    Challenge: ResolveChallenge(value.Challenge, pageHref),
   };
+}
+
+/**
+ * Valida el endpoint del desafío con las mismas reglas que el envío remoto.
+ */
+function ResolveChallenge(
+  value: unknown,
+  pageHref: string | undefined,
+): { Endpoint: string } | null {
+  if (!IsPlainObject(value)) {
+    return null;
+  }
+  const endpoint = ResolveEndpoint(value.Endpoint, pageHref);
+  return endpoint === null ? null : { Endpoint: endpoint };
 }

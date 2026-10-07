@@ -29,6 +29,10 @@ const ContentTypes = {
 
 let Collected = [];
 
+// Verificación anti-scraping con el bundle publicado (dist/server.js).
+const { CreateChallenge, VerifyRequest } = await import("../dist/server.js");
+const ChallengeSecret = "e2e-secret-with-at-least-32-characters!!";
+
 function Cors(request, response) {
   const origin = request.headers.origin;
   if (origin) {
@@ -87,6 +91,21 @@ async function Handle(request, response) {
 
   if (request.method === "OPTIONS") {
     response.writeHead(204).end();
+    return;
+  }
+  if (url.pathname === "/api/challenge") {
+    const issued = await CreateChallenge({
+      Secret: ChallengeSecret,
+      SessionId: url.searchParams.get("sid"),
+    });
+    response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(issued));
+    return;
+  }
+  if (url.pathname === "/api/protected") {
+    const result = await VerifyRequest(request.headers, { Secret: ChallengeSecret });
+    response
+      .writeHead(result.Decision === "allow" ? 200 : 403, { "Content-Type": "application/json" })
+      .end(JSON.stringify(result));
     return;
   }
   if (url.pathname === "/api/echo") {

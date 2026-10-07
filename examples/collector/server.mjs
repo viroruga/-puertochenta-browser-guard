@@ -26,6 +26,20 @@ const MaxRequestsPerMinute = 120;
 const MaxStoredInMemory = 500;
 const Schema = "browser-guard.findings/v1";
 
+// Verificación anti-scraping. En tu backend: import { ... } from "@puertochenta/browser-guard/server".
+// En este repositorio se usa el bundle compilado: ejecuta `pnpm build` en la raíz antes.
+const { CreateChallenge, VerifyRequest } = await import("../../dist/server.js").catch(() => {
+  console.error("dist/server.js not found: run `pnpm build` in the repository root first.");
+  process.exit(1);
+});
+
+// Secreto HMAC del servidor: en producción, un valor aleatorio largo guardado como secreto.
+const ChallengeSecret =
+  process.env.CHALLENGE_SECRET ?? "development-only-secret-change-me-0123456789";
+if (!process.env.CHALLENGE_SECRET) {
+  console.warn("Using a development CHALLENGE_SECRET. Set CHALLENGE_SECRET in production.");
+}
+
 const DataFile = join(dirname(fileURLToPath(import.meta.url)), "data", "findings.jsonl");
 const Recent = [];
 const RequestCounts = new Map();
@@ -141,23 +155,6 @@ async function HandleFindings(request, response, ip) {
   response.writeHead(204).end();
 }
 
-/**
- * Lee el header "X-BrowserGuard-Verdict: <veredicto>; score=<n>; sid=<id>".
- */
-function ParseVerdictHeader(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const [verdict, ...parts] = value.split(";").map((part) => part.trim());
-  const fields = Object.fromEntries(
-    parts.map((part) => part.split("=").map((item) => item.trim())),
-  );
-  if (!["unknown", "human", "suspicious", "bot"].includes(verdict)) {
-    return null;
-  }
-  return { Verdict: verdict, Score: Number(fields.score ?? 0), SessionId: fields.sid ?? "" };
-}
-
 const Catalog = [
   { Id: 1, Name: "Industrial drill", WholesalePrice: 1249 },
   { Id: 2, Name: "Safety gloves", WholesalePrice: 19 },
@@ -165,38 +162,48 @@ const Catalog = [
 ];
 
 /**
- * Endpoint de ejemplo protegido con el veredicto de BrowserGuard.
- *
- * - Sin header: el cliente no ejecutó BrowserGuard (curl, requests, Scrapy...) -> 403.
- * - bot -> 403. suspicious -> 429 (en un caso real: captcha o límite estricto).
- * - human / unknown -> 200.
- *
- * El header puede falsificarse: es una capa más, que debe combinarse con rate
- * limiting por sesión/IP y autenticación de la API.
+ * Emite un desafío firmado para la sesión de BrowserGuard (parámetro `sid`).
+ * El navegador lo resuelve y envía la prueba en el header de veredicto.
  */
-function HandleCatalog(request, response, ip) {
+async function HandleChallenge(url, response, ip) {
   if (IsRateLimited(ip)) {
     response.writeHead(429).end();
     return;
   }
-  const verdict = ParseVerdictHeader(request.headers["x-browserguard-verdict"]);
-  const reply = (status, body) => {
-    console.log(
-      `\x1b[36m API \x1b[0m GET /api/catalog -> ${status} (verdict: ${verdict?.Verdict ?? "missing"}, ip: ${ip})`,
-    );
-    response.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
-  };
-  if (!verdict) {
-    reply(403, {
-      Error: "Missing BrowserGuard verdict: automated client or BrowserGuard not running.",
-    });
-  } else if (verdict.Verdict === "bot") {
-    reply(403, { Error: "Automated access is not allowed." });
-  } else if (verdict.Verdict === "suspicious") {
-    reply(429, { Error: "Too many automated signals. Try again later." });
-  } else {
-    reply(200, { Verdict: verdict.Verdict, Items: Catalog });
+  const issued = await CreateChallenge({
+    Secret: ChallengeSecret,
+    SessionId: url.searchParams.get("sid"),
+  });
+  response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(issued));
+}
+
+const DecisionStatus = { allow: 200, challenge: 429, deny: 403 };
+
+/**
+ * Endpoint de ejemplo protegido por la verificación del servidor:
+ * - sin prueba válida (curl, requests, Scrapy, header falsificado) -> deny (403);
+ * - veredicto bot -> deny (403); suspicious o prueba vencida -> challenge (429:
+ *   en un caso real, pedir un captcha);
+ * - prueba válida y veredicto unknown/human -> allow (200).
+ *
+ * La prueba demuestra que el cliente ejecutó BrowserGuard y gastó CPU, no que sea
+ * humano: combínalo con rate limiting por sesión (Verdict.SessionId) e IP.
+ */
+async function HandleCatalog(request, response, ip) {
+  if (IsRateLimited(ip)) {
+    response.writeHead(429).end();
+    return;
   }
+  const result = await VerifyRequest(request.headers, { Secret: ChallengeSecret });
+  const status = DecisionStatus[result.Decision];
+  console.log(
+    `\x1b[36m API \x1b[0m GET /api/catalog -> ${status} (decision: ${result.Decision}, proof: ${result.Proof.Status}, verdict: ${result.Verdict?.Verdict ?? "missing"}, ip: ${ip})`,
+  );
+  const body =
+    result.Decision === "allow"
+      ? { Verdict: result.Verdict?.Verdict, Items: Catalog }
+      : { Decision: result.Decision, Proof: result.Proof.Status };
+  response.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
 }
 
 function RenderDashboard() {
@@ -257,12 +264,18 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   ApplyCors(request, response);
 
+  if (url.pathname === "/api/challenge" && request.method === "GET") {
+    HandleChallenge(url, response, ip).catch(() => response.writeHead(500).end());
+    return;
+  }
   if (url.pathname === "/api/catalog" && request.method === "GET") {
-    HandleCatalog(request, response, ip);
+    HandleCatalog(request, response, ip).catch(() => response.writeHead(500).end());
     return;
   }
   if (
-    (url.pathname === "/findings" || url.pathname === "/api/catalog") &&
+    (url.pathname === "/findings" ||
+      url.pathname === "/api/catalog" ||
+      url.pathname === "/api/challenge") &&
     request.method === "OPTIONS"
   ) {
     response.writeHead(204).end();

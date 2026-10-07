@@ -11,7 +11,7 @@ import { BotDetector, NoInteractionAfterMs } from "../src/Detectors/BotDetector"
 import { RequestPatternTracker } from "../src/Detectors/RequestPatternTracker";
 import { SyntheticEventThreshold } from "../src/Monitors/InteractionMonitor";
 import { ContentShield, ShieldedAttribute } from "../src/Protection/ContentShield";
-import type { BotAssessment } from "../src/Types/Bot";
+import type { SessionAssessment } from "../src/Types/Bot";
 import type { ResolvedAntiScrapingConfig } from "../src/Types/BrowserGuardConfig";
 import type { BotActivityData, SecurityEvent, SecurityEventType } from "../src/Types/SecurityEvent";
 import { DetectAutomationSignals, DetectEnvironmentSignals } from "../src/Utils/AutomationSignals";
@@ -61,6 +61,7 @@ describe("ResolveAntiScrapingConfig", () => {
       ProtectAt: "bot",
       Placeholder: AntiScrapingDefaults.Placeholder,
       VerdictHeader: { Enabled: true, Name: "X-BrowserGuard-Verdict", Origins: [] },
+      Challenge: null,
     });
   });
 
@@ -389,8 +390,8 @@ describe("BotDetector", () => {
 });
 
 describe("BotSession", () => {
-  function Create(): { Session: BotSession; Changes: BotAssessment[] } {
-    const changes: BotAssessment[] = [];
+  function Create(): { Session: BotSession; Changes: SessionAssessment[] } {
+    const changes: SessionAssessment[] = [];
     return { Session: new BotSession(new RiskEngine(), (a) => changes.push(a)), Changes: changes };
   }
 

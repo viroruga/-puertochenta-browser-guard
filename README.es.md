@@ -690,8 +690,11 @@ BrowserGuard.Start({
 | Plugin            | Ruta                                        | Agrega (min+gzip) |
 | ----------------- | ------------------------------------------- | ----------------- |
 | núcleo            | `@puertochenta/browser-guard`               | 18,0 KB           |
-| `AntiScraping`    | `@puertochenta/browser-guard/anti-scraping` | +4,2 KB           |
+| `AntiScraping`    | `@puertochenta/browser-guard/anti-scraping` | +5,4 KB           |
 | `RemoteReporting` | `@puertochenta/browser-guard/remote`        | +2,0 KB           |
+
+El verificador del servidor es una cuarta ruta, `@puertochenta/browser-guard/server`, para tu
+backend (ver [Verificación en el servidor](#verificación-en-el-servidor-desafío--prueba-de-trabajo)).
 
 `GetStatus().Plugins` indica si cada plugin quedó activo; por ejemplo, `RemoteReporting` con un
 endpoint inválido queda inactivo:
@@ -886,22 +889,75 @@ return Assessment?.Verdict === "bot" ? <Unavailable /> : <PriceTable />;
 X-BrowserGuard-Verdict: human; score=0; sid=3f0c1d9e-…
 ```
 
-Ejemplo de uso en el servidor (Express):
+Por sí solo, el header es una **declaración**: un scraper que lo conozca puede enviar `human`.
+Activa el desafío verificable en el servidor (abajo) para que tu backend distinga una sesión real
+de BrowserGuard de un header falsificado. Para orígenes externos, el header dispara un preflight
+CORS: ese servidor debe permitirlo en `Access-Control-Allow-Headers`.
+
+### Verificación en el servidor (desafío + prueba de trabajo)
+
+1. Tu servidor emite un **desafío firmado con HMAC** (el secreto nunca sale del servidor), atado a
+   la sesión de BrowserGuard y con vencimiento.
+2. El navegador resuelve una **prueba de trabajo** (unos cientos de milisegundos, asíncrona, sin
+   bloquear la interfaz), la renueva antes de que venza y la agrega al header de veredicto:
+   `...; proof=<desafío>~<solución>`.
+3. Tu servidor verifica firma, vencimiento, sesión y trabajo, y obtiene una decisión recomendada.
 
 ```ts
-app.use("/api", (req, res, next) => {
-  const verdict = req.get("X-BrowserGuard-Verdict")?.split(";")[0];
-  if (!verdict) return res.status(403).end(); // no ejecutó BrowserGuard: curl, Scrapy...
-  if (verdict === "bot") return res.status(403).end();
-  if (verdict === "suspicious") return res.status(429).end(); // o pedir un captcha
-  next();
+// Navegador
+BrowserGuard.Start({
+  Plugins: [AntiScraping({ Challenge: { Endpoint: "/api/challenge" } })],
 });
 ```
 
-> El header puede **falsificarse**: un scraper que lo conozca puede enviarlo con valor `human`.
-> Sirve para descartar el scraping sin JavaScript y los bots detectados, pero debe combinarse con
-> rate limiting por sesión (`sid`) e IP. Para orígenes externos, el header dispara un preflight
-> CORS: ese servidor debe permitirlo en `Access-Control-Allow-Headers`.
+```ts
+// Servidor (Express como ejemplo; funciona en Node, Deno, Bun y edge: solo usa Web Crypto)
+import { CreateChallenge, VerifyRequest } from "@puertochenta/browser-guard/server";
+
+const Secret = process.env.BROWSER_GUARD_SECRET; // aleatorio, 32+ caracteres
+
+app.get("/api/challenge", async (req, res) => {
+  res.json(await CreateChallenge({ Secret, SessionId: req.query.sid }));
+});
+
+app.use("/api", async (req, res, next) => {
+  const { Decision, Proof, Verdict } = await VerifyRequest(req.headers, { Secret });
+  if (Decision === "deny") return res.status(403).end(); // sin prueba válida, o veredicto "bot"
+  if (Decision === "challenge") return res.status(429).end(); // "suspicious" o vencida: captcha
+  next(); // Verdict.SessionId: úsalo para rate limiting por sesión
+});
+```
+
+| Cliente                                            | Prueba                                          | Decisión             |
+| -------------------------------------------------- | ----------------------------------------------- | -------------------- |
+| Navegador con BrowserGuard, comportamiento humano  | `valid`                                         | `allow`              |
+| `curl`, Python `requests`, Scrapy (sin JavaScript) | `missing`                                       | `deny`               |
+| Header falsificado (`human; score=0`)              | `missing`/`invalid-signature`                   | `deny`               |
+| Prueba de otra sesión, vencida o sin trabajo       | `session-mismatch` / `expired` / `invalid-work` | `deny` / `challenge` |
+| Sesión clasificada como `suspicious` / `bot`       | `valid`                                         | `challenge` / `deny` |
+
+`CreateChallenge({ Difficulty })` define el trabajo (8-24 bits, por defecto 14; cada bit lo
+duplica). `GetBotAssessment().Proof` indica a la app si la prueba está `pending`, `ready` o
+`failed`, por ejemplo para esperar antes de llamar a una API protegida.
+
+> **Qué garantiza y qué no.** La prueba demuestra que el cliente obtuvo un desafío de tu servidor
+> para esa sesión y gastó CPU: los clientes sin JavaScript no pueden falsificar el header, y cada
+> sesión de bot cuesta cómputo. **No** demuestra que el cliente sea humano: un navegador
+> automatizado real la resuelve como cualquier visitante. Para eso están la detección de
+> comportamiento y el rate limiting por sesión e IP.
+
+### Captcha para sesiones sospechosas
+
+BrowserGuard no incluye un captcha (cada proveedor tiene su SDK), pero el evento `Bot` es el lugar
+para integrarlo, y la decisión `challenge` del servidor es donde exigirlo:
+
+```ts
+Guard.On("Bot", (Assessment) => {
+  if (Assessment.Verdict === "suspicious") {
+    ShowCaptcha(); // p. ej. Cloudflare Turnstile o hCaptcha; verifica su token en tu servidor
+  }
+});
+```
 
 **3. Reporte.** Cada detección genera un hallazgo de categoría `bot`, que llega a `On()`,
 al historial y al envío remoto. `GetStatus()` incluye `Bot` y `SessionId`.
@@ -922,6 +978,9 @@ interface AntiScrapingConfig {
   ProtectSelector?: string; // por defecto: "[data-guard-protect]"
   ProtectAt?: "suspicious" | "bot"; // por defecto: "bot"
   Placeholder?: string; // por defecto: "Content unavailable."
+  Challenge?: {
+    Endpoint: string; // emite los desafíos (https, mismo origen o localhost)
+  };
   VerdictHeader?: {
     Enabled?: boolean; // por defecto: true
     Name?: string; // por defecto: "X-BrowserGuard-Verdict"
@@ -970,7 +1029,9 @@ interface AntiScrapingConfig {
 - **URLs desconocidas.** Para no ejecutar código de la aplicación, solo se interpretan destinos
   `string`, `URL` y `Request`; otros objetos se registran como `[unknown]`.
 - **CSP.** `CspMonitor` solo funciona si la página tiene una política CSP.
-- **Anti-scraping.** No detiene scrapers sin JavaScript ni bots que neutralicen el script;
+- **Anti-scraping.** En el cliente no detiene scrapers sin JavaScript ni bots que neutralicen el
+  script (el desafío del servidor rechaza a los primeros); la prueba de trabajo no demuestra que el
+  cliente sea humano;
   la paginación por query string (`?page=2`) no se detecta como barrido, porque la query se
   descarta por privacidad. Ver [Anti-scraping](#anti-scraping).
 
@@ -1055,7 +1116,8 @@ src/
 │                             # Automation, Interaction
 ├── Detectors/                # Network, ScriptInjection, CspViolation,
 │                             # PrototypePollution, RuntimeIntegrity, Bot
-├── Protection/               # ContentShield (anti-scraping)
+├── Protection/               # ContentShield, ChallengeClient (anti-scraping)
+├── Server/                   # ruta /server: CreateChallenge, VerifyRequest (backend)
 ├── Reporters/                # Reporter, ConsoleReporter, ConsoleNotice,
 │                             # RemoteReporter, RemoteTransport
 └── Utils/                    # StackTrace, UrlUtils, SafeSerializer, NativeFunctionUtils,

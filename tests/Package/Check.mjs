@@ -74,13 +74,20 @@ try {
     "@puertochenta/browser-guard",
     "@puertochenta/browser-guard/anti-scraping",
     "@puertochenta/browser-guard/remote",
+    "@puertochenta/browser-guard/server",
   ];
   const script = entries
     .map((entry) => `const m${entries.indexOf(entry)} = await import("${entry}");`)
     .join("\n");
   writeFileSync(
     join(consumer, "ssr.mjs"),
-    `${script}\nconst guard = m0.BrowserGuard.Start({ Plugins: [m1.AntiScraping(), m2.RemoteReporting({ Endpoint: "https://x.example" })] });\nif (guard.IsRunning()) throw new Error("must be inert in SSR");\nconsole.log("SSR import OK:", Object.keys(m0), Object.keys(m1), Object.keys(m2));\n`,
+    `${script}\nconst guard = m0.BrowserGuard.Start({ Plugins: [m1.AntiScraping(), m2.RemoteReporting({ Endpoint: "https://x.example" })] });\nif (guard.IsRunning()) throw new Error("must be inert in SSR");\nconsole.log("SSR import OK:", Object.keys(m0), Object.keys(m1), Object.keys(m2));\n` +
+      // Backend en Node: un header sin prueba se rechaza y se pueden emitir desafíos.
+      `const secret = "x".repeat(32);\n` +
+      `const result = await m3.VerifyRequest({ "x-browserguard-verdict": "human; score=0" }, { Secret: secret });\n` +
+      `if (result.Decision !== "deny") throw new Error("forged header must be denied");\n` +
+      `const issued = await m3.CreateChallenge({ Secret: secret, Difficulty: 8 });\n` +
+      `console.log("Server entry OK:", result.Proof.Status, issued.Difficulty);\n`,
   );
   console.log("\n▶ node ssr.mjs");
   Run("node", ["ssr.mjs"], consumer);

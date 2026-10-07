@@ -1,4 +1,4 @@
-import type { BotAssessment, BotVerdict } from "../Types/Bot";
+import type { BotVerdict, SessionAssessment } from "../Types/Bot";
 import type { RiskEngine } from "./RiskEngine";
 import type { RiskSignal } from "./RiskSignals";
 
@@ -32,7 +32,7 @@ const UncompensableSignals: ReadonlySet<RiskSignal> = new Set([
  */
 export class BotSession {
   private readonly Signals = new Set<RiskSignal>();
-  private Assessment: BotAssessment = {
+  private Assessment: SessionAssessment = {
     Verdict: "unknown",
     Score: 0,
     Signals: [],
@@ -41,7 +41,7 @@ export class BotSession {
 
   public constructor(
     private readonly Engine: RiskEngine,
-    private readonly OnChange: (assessment: BotAssessment) => void,
+    private readonly OnChange: (assessment: SessionAssessment) => void,
   ) {}
 
   /**
@@ -75,7 +75,7 @@ export class BotSession {
     }
   }
 
-  public Get(): BotAssessment {
+  public Get(): SessionAssessment {
     return { ...this.Assessment, Signals: [...this.Assessment.Signals] };
   }
 

@@ -7,6 +7,8 @@ export default defineConfig({
     index: "src/Index.ts",
     "anti-scraping": "src/Plugins/AntiScrapingPlugin.ts",
     remote: "src/Plugins/RemoteReportingPlugin.ts",
+    // Verificación en el backend (Node, Deno, Bun, edge): sin dependencias del DOM.
+    server: "src/Server/Index.ts",
   },
   format: ["esm"],
   target: "es2020",

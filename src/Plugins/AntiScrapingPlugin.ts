@@ -62,4 +62,4 @@ export function AntiScraping(config: AntiScrapingConfig = {}): GuardPlugin {
 }
 
 export type { AntiScrapingConfig } from "../Types/BrowserGuardConfig";
-export type { BotAssessment, BotVerdict } from "../Types/Bot";
+export type { BotAssessment, BotVerdict, ProofState } from "../Types/Bot";

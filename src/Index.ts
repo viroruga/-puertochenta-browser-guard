@@ -38,7 +38,7 @@ export type {
   GuardEventName,
   GuardStatus,
 } from "./Types/GuardStatus";
-export type { BotAssessment, BotVerdict } from "./Types/Bot";
+export type { BotAssessment, BotVerdict, ProofState } from "./Types/Bot";
 export type { Monitor, MonitorStatus } from "./Types/Monitor";
 export type { Reporter } from "./Reporters/Reporter";
 export type { RemotePayload, RemoteStats } from "./Types/Remote";

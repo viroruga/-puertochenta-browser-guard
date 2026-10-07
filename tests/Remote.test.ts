@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserGuard } from "../src/BrowserGuard";
 import { RemoteReporting } from "../src/Plugins/RemoteReportingPlugin";
-import {
-  RemoteLimits,
-  ResolveEndpoint,
-  ResolveRemoteConfig,
-} from "../src/Config/ResolveRemoteConfig";
+import { ResolveEndpoint } from "../src/Config/ConfigValidators";
+import { RemoteLimits, ResolveRemoteConfig } from "../src/Config/ResolveRemoteConfig";
 import { MaxBackoffMs, RemotePayloadSchema, RemoteReporter } from "../src/Reporters/RemoteReporter";
 import type { RemotePayload } from "../src/Types/Remote";
 import {

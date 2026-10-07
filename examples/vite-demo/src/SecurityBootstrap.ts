@@ -30,6 +30,8 @@ export const GuardConfig: BrowserGuardConfig = {
     AntiScraping({
       Placeholder: "Contenido no disponible.",
       VerdictHeader: { Origins: ["http://localhost:8787"] },
+      // Desafío firmado por el colector: la API exige la prueba de trabajo.
+      Challenge: { Endpoint: "http://localhost:8787/api/challenge" },
     }),
   ],
   Network: {
