@@ -1,4 +1,10 @@
 /**
+ * Bus de eventos tipado que BrowserGuard usa en dos lugares:
+ * - el bus interno (SecurityEvents de GuardContext → Detectors);
+ * - el bus público (Finding, Threat, Critical..., Bot → manejadores de la aplicación).
+ */
+
+/**
  * Manejador de un evento con payload tipado.
  */
 export type EventHandler<T> = (payload: T) => void;
@@ -18,9 +24,18 @@ type StoredHandler = EventHandler<never>;
  *   suscribirse o desuscribirse durante una emisión.
  */
 export class EventBus<TEvents extends Record<string, unknown>> {
+  /** Un Set por evento: suscribir dos veces el mismo manejador no lo duplica. */
   private readonly Handlers = new Map<keyof TEvents, Set<StoredHandler>>();
+  /**
+   * Manejador original → envoltorio de Once, para que Off(handler) pueda quitar el
+   * envoltorio sin que la aplicación conozca su referencia.
+   */
   private readonly OnceWrappers = new Map<keyof TEvents, Map<StoredHandler, StoredHandler>>();
 
+  /**
+   * @param OnError Recibe los errores de los manejadores. BrowserGuard los re-lanza de
+   * forma asíncrona en el bus público y solo los cuenta en el interno.
+   */
   public constructor(private readonly OnError?: (error: unknown, event: keyof TEvents) => void) {}
 
   /**
@@ -42,6 +57,8 @@ export class EventBus<TEvents extends Record<string, unknown>> {
    * Suscribe un manejador que se ejecuta una única vez.
    */
   public Once<K extends keyof TEvents>(event: K, handler: EventHandler<TEvents[K]>): () => void {
+    // Se desuscribe antes de invocar: si el manejador vuelve a emitir el mismo evento,
+    // no se ejecuta dos veces.
     const wrapper: EventHandler<TEvents[K]> = (payload) => {
       this.Off(event, handler);
       handler(payload);
@@ -59,7 +76,8 @@ export class EventBus<TEvents extends Record<string, unknown>> {
   }
 
   /**
-   * Desuscribe un manejador (registrado con On u Once).
+   * Desuscribe un manejador (registrado con On u Once). Las entradas vacías se
+   * eliminan para que el bus no acumule memoria con suscripciones temporales.
    */
   public Off<K extends keyof TEvents>(event: K, handler: EventHandler<TEvents[K]>): void {
     const handlers = this.Handlers.get(event);
@@ -84,13 +102,15 @@ export class EventBus<TEvents extends Record<string, unknown>> {
   }
 
   /**
-   * Emite un evento de forma síncrona a todos los manejadores suscritos.
+   * Emite un evento de forma síncrona a todos los manejadores suscritos, en orden de
+   * suscripción. Nunca lanza.
    */
   public Emit<K extends keyof TEvents>(event: K, payload: TEvents[K]): void {
     const handlers = this.Handlers.get(event);
     if (!handlers || handlers.size === 0) {
       return;
     }
+    // Copia: un manejador puede suscribir o desuscribir durante la emisión.
     for (const handler of [...handlers]) {
       try {
         (handler as EventHandler<TEvents[K]>)(payload);

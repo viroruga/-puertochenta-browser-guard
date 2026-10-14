@@ -2,6 +2,9 @@
  * Servicios de terceros conocidos. Declararlos en `Services` agrega sus orígenes a las
  * listas permitidas y, en algunos casos, reconoce los wrappers que instalan sobre
  * funciones del runtime (p. ej. Sentry sobre fetch y setTimeout).
+ *
+ * Es opt-in a propósito: nada de este catálogo se confía si el sitio no declara el
+ * servicio, para no ampliar la superficie permitida de quien no lo usa.
  */
 export type KnownService =
   | "stripe"
@@ -17,6 +20,7 @@ export type KnownService =
   | "intercom"
   | "zone.js";
 
+/** Lo que aporta un servicio declarado a la configuración resuelta. */
 export interface ServiceDefinition {
   /** Orígenes desde los que el servicio carga scripts. */
   Scripts: readonly string[];
@@ -32,6 +36,10 @@ export interface ServiceDefinition {
 /**
  * Catálogo de orígenes según la documentación de CSP de cada proveedor. Es un punto de
  * partida: si un proveedor cambia sus dominios, el modo aprendizaje los muestra.
+ *
+ * Scripts va a Dom.AllowedScriptOrigins y Network a Network.AllowedOrigins. Se mantienen
+ * separados porque confiar en un origen para recibir datos no equivale a confiarle la
+ * ejecución de código en la página.
  */
 export const ServiceCatalog: Readonly<Record<KnownService, ServiceDefinition>> = {
   stripe: {
@@ -111,10 +119,13 @@ export const ServiceCatalog: Readonly<Record<KnownService, ServiceDefinition>> =
   },
 };
 
+/** Nombres de todos los servicios del catálogo. */
 export const KnownServices = Object.keys(ServiceCatalog) as KnownService[];
 
 /**
  * Filtra nombres desconocidos o repetidos (tolerante a entradas inválidas).
+ * Usa hasOwnProperty para que nombres heredados ("toString", "__proto__") no pasen como
+ * servicios.
  */
 export function ResolveServices(value: unknown): KnownService[] {
   if (!Array.isArray(value)) {
@@ -133,7 +144,8 @@ export function MergeOrigins(base: readonly string[], extra: readonly string[]):
 }
 
 /**
- * Contribución combinada de los servicios declarados.
+ * Contribución combinada de los servicios declarados: orígenes de scripts, orígenes de
+ * red y marcas de wrappers, sin duplicados. ResolveConfig la une a las listas del usuario.
  */
 export function ExpandServices(services: readonly KnownService[]): {
   Scripts: string[];

@@ -38,8 +38,10 @@ import { RingBuffer } from "./Utils/RingBuffer";
  */
 const ActiveInstanceKey = Symbol.for("puertochenta.browser-guard.active-instance");
 
+/** globalThis con la ranura simbólica de la instancia activa. */
 type GuardGlobal = typeof globalThis & { [ActiveInstanceKey]?: BrowserGuard };
 
+/** Evento público específico de cada severidad (además de "Finding" y "Threat"). */
 const SeverityEvents: Record<Severity, FindingEventName> = {
   critical: "Critical",
   high: "High",
@@ -48,6 +50,10 @@ const SeverityEvents: Record<Severity, FindingEventName> = {
   info: "Info",
 };
 
+/**
+ * Detecta si hay un navegador real. En SSR (Node, Deno, workers sin DOM) BrowserGuard
+ * no intercepta nada y queda como instancia inerte.
+ */
 function IsBrowserEnvironment(): boolean {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
@@ -89,18 +95,33 @@ function ReportHandlerError(error: unknown): void {
  *
  * Start() es idempotente: mientras exista una instancia en ejecución, retorna esa
  * misma instancia e ignora la nueva configuración.
+ *
+ * Esta clase es la fachada pública y el orquestador: crea los componentes del núcleo
+ * (Components) y de los plugins (PluginManager), conecta el pipeline y expone la API
+ * estática (sobre la instancia activa), la de instancia y el store reactivo
+ * (Subscribe/GetSnapshot). Solo detecta y reporta: nunca bloquea a la aplicación.
  */
 export class BrowserGuard {
   private readonly Config: ResolvedConfig;
+  /** false en SSR: la instancia existe (la API funciona) pero no observa nada. */
   private readonly Supported: boolean;
   private readonly StartedAt = Date.now();
   private StoppedAt: number | null = null;
   private Running = false;
+  /**
+   * Errores de detectores, reporters, plugins y monitores. Se suman a los de
+   * GuardContext en GetStatus().InternalErrors.
+   */
   private HandlerErrors = 0;
 
+  /**
+   * Eventos para la aplicación. Los errores de sus manejadores se re-lanzan de forma
+   * asíncrona (visibles en consola) sin cortar a los demás manejadores.
+   */
   private readonly PublicBus = new EventBus<PublicEventMap>((error) => {
     ReportHandlerError(error);
   });
+  /** SecurityEvents → detectores. Un detector que falla solo se contabiliza. */
   private readonly InternalBus = new EventBus<InternalEventMap>(() => {
     this.HandlerErrors++;
   });
@@ -108,17 +129,23 @@ export class BrowserGuard {
     this.HandlerErrors++;
   });
   private readonly History: FindingHistory;
+  /** Últimos eventos internos; solo existe con Forensic.Enabled. */
   private readonly Timeline: RingBuffer<SecurityEvent> | null;
   private readonly Engine: RiskEngine;
+  /** Reporters activos (núcleo + plugins + propios); se arman en Activate(). */
   private Reporters: Reporter[] = [];
+  /** Reporters propios de la aplicación (config.Reporters), ya validados. */
   private readonly CustomReporters: Reporter[];
   private readonly Plugins: PluginManager;
   private readonly Store: GuardStore;
+  /** null en SSR (nunca se activa). Se conserva tras Stop() para GetStatus(). */
   private Context: GuardContext | null = null;
   /** Solo con Learning.Enabled. Se conserva después de Stop() para consultar lo aprendido. */
   private Learner: OriginLearner | null = null;
+  /** Desuscripciones de los detectores del bus interno, ejecutadas en Stop(). */
   private readonly Unsubscribers: (() => void)[] = [];
 
+  /** Privado: las instancias se crean con Start() para garantizar la idempotencia. */
   private constructor(config: BrowserGuardConfig) {
     this.Config = ResolveConfig(config);
     // Los reporters propios no forman parte de ResolvedConfig (que debe ser clonable).
@@ -129,6 +156,7 @@ export class BrowserGuard {
     this.Plugins = new PluginManager(config.Plugins, () => {
       this.HandlerErrors++;
     });
+    // Lo que sigue no toca APIs del navegador: es seguro también en SSR.
     this.Supported = IsBrowserEnvironment();
     this.History = new FindingHistory(this.Config.History.MaxFindings);
     this.Timeline = this.Config.Forensic.Enabled
@@ -155,6 +183,8 @@ export class BrowserGuard {
     }
     const guard = new BrowserGuard(config);
     guard.Activate();
+    // En SSR la instancia queda inerte y no se publica como activa: las llamadas
+    // estáticas siguen retornando null y un Start() posterior crea una nueva.
     if (guard.IsRunning()) {
       SetActiveInstance(guard);
     }
@@ -172,6 +202,7 @@ export class BrowserGuard {
     return active ? active.On(event, handler) : () => undefined;
   }
 
+  /** Desuscribe un manejador de la instancia activa. */
   public static Off<K extends GuardEventName>(event: K, handler: GuardEventHandler<K>): void {
     GetActiveInstance()?.Off(event, handler);
   }
@@ -181,14 +212,17 @@ export class BrowserGuard {
     return GetActiveInstance()?.GetBotAssessment() ?? null;
   }
 
+  /** Reporte de la instancia activa, o null si no hay ninguna en ejecución. */
   public static GetReport(): GuardReport | null {
     return GetActiveInstance()?.GetReport() ?? null;
   }
 
+  /** Estado de la instancia activa, o null si no hay ninguna en ejecución. */
   public static GetStatus(): GuardStatus | null {
     return GetActiveInstance()?.GetStatus() ?? null;
   }
 
+  /** Línea de tiempo forense de la instancia activa (vacía si no hay o no es forense). */
   public static GetTimeline(): SecurityEvent[] {
     return GetActiveInstance()?.GetTimeline() ?? [];
   }
@@ -205,14 +239,20 @@ export class BrowserGuard {
 
   // ──────────────────────────── API de instancia ───────────────────────────
 
+  /**
+   * Suscribe un manejador a un evento público ("Finding", "Threat", una severidad o
+   * "Bot"). Retorna la función para desuscribirlo. Stop() elimina todas las suscripciones.
+   */
   public On<K extends GuardEventName>(event: K, handler: GuardEventHandler<K>): () => void {
     return this.PublicBus.On(event, handler);
   }
 
+  /** Como On(), pero el manejador se ejecuta una única vez. */
   public Once<K extends GuardEventName>(event: K, handler: GuardEventHandler<K>): () => void {
     return this.PublicBus.Once(event, handler);
   }
 
+  /** Desuscribe un manejador registrado con On() u Once(). */
   public Off<K extends GuardEventName>(event: K, handler: GuardEventHandler<K>): void {
     this.PublicBus.Off(event, handler);
   }
@@ -225,6 +265,7 @@ export class BrowserGuard {
     return this.Plugins.GetBotAssessment();
   }
 
+  /** true entre un Start() exitoso en el navegador y Stop(). */
   public IsRunning(): boolean {
     return this.Running;
   }
@@ -250,6 +291,7 @@ export class BrowserGuard {
     this.Running = false;
     this.StoppedAt = Date.now();
 
+    // Primero se restauran las APIs interceptadas: desde aquí no se capturan eventos nuevos.
     this.Registry.StopAll();
     // Se procesan los eventos capturados antes de detener, y luego se descarta el contexto.
     this.Context?.Flush();
@@ -269,6 +311,7 @@ export class BrowserGuard {
     }
     this.Reporters = [];
     this.PublicBus.Clear();
+    // El store conserva sus suscriptores: un componente montado debe ver Running: false.
     this.Store.Update({ Running: false });
 
     if (GetActiveInstance() === this) {
@@ -276,6 +319,10 @@ export class BrowserGuard {
     }
   }
 
+  /**
+   * Hallazgos retenidos (hasta History.MaxFindings) y estadísticas acumuladas.
+   * Sigue disponible después de Stop().
+   */
   public GetReport(): GuardReport {
     return {
       StartedAt: this.StartedAt,
@@ -284,6 +331,7 @@ export class BrowserGuard {
     };
   }
 
+  /** Estado operativo: monitores, plugins, eventos descartados, errores, bot y sesión. */
   public GetStatus(): GuardStatus {
     return {
       Supported: this.Supported,
@@ -327,6 +375,11 @@ export class BrowserGuard {
 
   // ─────────────────────────────── Internos ────────────────────────────────
 
+  /**
+   * Arma y arranca el pipeline. En SSR no hace nada (Running queda en false).
+   * El orden importa: contexto → plugins → reporters → detectores → monitores, de modo
+   * que todo consumidor esté conectado antes de que un monitor pueda emitir.
+   */
   private Activate(): void {
     if (!this.Supported) {
       return;
@@ -356,6 +409,8 @@ export class BrowserGuard {
     for (const monitor of [...CreateMonitors(context), ...this.Plugins.Monitors]) {
       this.Registry.Register(monitor);
     }
+    // Running se marca antes de iniciar: un monitor podría emitir (y un manejador
+    // consultar IsRunning) durante su propio Start().
     this.Running = true;
     this.Registry.StartAll();
     this.Store.Update({ Running: true, Bot: this.Plugins.GetBotAssessment() });
@@ -367,6 +422,7 @@ export class BrowserGuard {
     }
   }
 
+  /** Suscribe el detector al bus interno para cada tipo de evento que declara en Handles. */
   private AttachDetector(detector: Detector): void {
     for (const type of detector.Handles) {
       this.Unsubscribers.push(
@@ -377,6 +433,10 @@ export class BrowserGuard {
     }
   }
 
+  /**
+   * Destino de cada evento despachado por GuardContext (ya fuera de la llamada de la
+   * aplicación): timeline forense → modo aprendizaje → detectores.
+   */
   private DispatchEvent<K extends SecurityEventType>(event: TypedSecurityEvent<K>): void {
     this.Timeline?.Push(event);
     if (this.Learner) {
@@ -385,6 +445,7 @@ export class BrowserGuard {
     this.InternalBus.Emit(event.Type, event as InternalEventMap[K]);
   }
 
+  /** Pasa al modo aprendizaje los eventos que revelan orígenes de terceros. */
   private Learn(event: SecurityEvent): void {
     const learner = this.Learner;
     if (event.Type === "network.request") {
@@ -394,6 +455,10 @@ export class BrowserGuard {
     }
   }
 
+  /**
+   * Ejecuta un detector sobre un evento. Los errores del detector los captura el bus
+   * interno (se contabilizan en HandlerErrors).
+   */
   private RunDetector(detector: Detector, event: SecurityEvent): void {
     const candidate = detector.Analyze(event);
     if (!candidate) {
@@ -401,11 +466,18 @@ export class BrowserGuard {
     }
     const finding = this.Engine.Evaluate(candidate, event);
     if (finding) {
+      // Congelado: el mismo objeto llega a historial, manejadores y reporters; ninguno
+      // debe poder alterar lo que ven los demás.
       this.Publish(Object.freeze(finding));
     }
+    // Los plugins reciben el candidato aunque no haya superado Risk.MinSeverity.
     this.Plugins.NotifyCandidate(candidate);
   }
 
+  /**
+   * Difunde un hallazgo: historial y store primero (así un manejador que consulte
+   * GetReport() o GetSnapshot() ya lo ve), luego eventos públicos y reporters.
+   */
   private Publish(finding: SecurityFinding): void {
     this.History.Add(finding);
     this.Store.Update({ LastFinding: finding, Statistics: this.History.GetStatistics() });
@@ -416,6 +488,7 @@ export class BrowserGuard {
     }
     this.PublicBus.Emit(SeverityEvents[finding.Severity], finding);
 
+    // Cada reporter aislado: uno que falla no impide que los demás reciban el hallazgo.
     for (const reporter of this.Reporters) {
       try {
         reporter.Report(finding);

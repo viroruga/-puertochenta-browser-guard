@@ -8,14 +8,20 @@ type RuntimeWindow = Window & typeof globalThis;
 /** Profundidad máxima al seguir una cadena de wrappers marcados. */
 const MaxWrapperDepth = 5;
 
+/** Función crítica vigilada. */
 interface RuntimeTarget {
+  /** Nombre legible que se informa en el evento (p. ej. "XMLHttpRequest.prototype.open"). */
   Name: string;
   /** Objeto que contiene la función (window, un prototipo, ...). */
   Owner: (window: RuntimeWindow) => object | undefined;
+  /** Propiedad del Owner; también es el `name` esperado de la función nativa. */
   Key: string;
+  /** Es un constructor (WebSocket, Function): cambia las heurísticas de AnalyzeFunction. */
   IsConstructor?: boolean;
 }
 
+// Los Owner se resuelven en cada lectura (no se cachean): así un reemplazo del objeto
+// contenedor o de la función se observa igual. XMLHttpRequest puede no existir.
 const OnWindow = (window: RuntimeWindow): object => window;
 const OnXhrPrototype = (window: RuntimeWindow): object | undefined =>
   (window.XMLHttpRequest as typeof XMLHttpRequest | undefined)?.prototype;
@@ -41,7 +47,8 @@ export const RuntimeTargets: readonly RuntimeTarget[] = [
 ];
 
 /**
- * Verifica periódicamente la integridad de funciones críticas del runtime.
+ * Verifica periódicamente la integridad de funciones críticas del runtime y emite
+ * `runtime.modified`, que consume RuntimeIntegrityDetector.
  *
  * - Al iniciar toma un baseline de referencias; si alguna ya parece no nativa,
  *   emite un evento de fase "baseline" (modificación previa a BrowserGuard).
@@ -50,6 +57,10 @@ export const RuntimeTargets: readonly RuntimeTarget[] = [
  * - Ignora los interceptores instalados por la propia librería.
  * - Ignora los wrappers de servicios declarados (Sentry, Zone.js) cuando su marca
  *   apunta, directa o encadenadamente, a la referencia legítima anterior.
+ *
+ * No intercepta nada: solo lee referencias por polling (PeriodicTask, en tiempo ocioso).
+ * Privacidad: el evento solo contiene el nombre del objetivo y el resultado del análisis,
+ * nunca el código fuente de la función.
  */
 export class RuntimeMonitor extends BaseMonitor {
   public readonly Name = "RuntimeMonitor";
@@ -60,6 +71,8 @@ export class RuntimeMonitor extends BaseMonitor {
   private Task: PeriodicTask | null = null;
 
   protected OnStart(): boolean {
+    // Baseline: una función que ya no parece nativa antes de iniciar se reporta como
+    // "baseline", salvo que sea propia o un wrapper declarado sobre una función nativa.
     for (const target of RuntimeTargets) {
       const value = this.Read(target);
       this.Initial.set(target.Name, value);
@@ -99,11 +112,17 @@ export class RuntimeMonitor extends BaseMonitor {
     for (const target of RuntimeTargets) {
       const current = this.Read(target);
       const previous = this.Baseline.get(target.Name);
+      // Comparación por identidad: barata, y la mayoría de las veces nada cambió. Los
+      // interceptores propios (FetchMonitor, SinkMonitor...) no son cambios sospechosos.
       if (current === previous || this.Context.IsOwnFunction(current)) {
         continue;
       }
+      // Se actualiza antes de decidir si reportar: cada cambio se evalúa una sola vez.
       this.Baseline.set(target.Name, current);
       const initial = this.Initial.get(target.Name);
+      // Volver a la referencia inicial (p. ej. una librería retiró su wrapper) o un
+      // wrapper declarado que envuelve la referencia anterior, la inicial o la propia
+      // no se reporta.
       if (
         current === initial ||
         this.UnwrapsTo(
@@ -115,6 +134,7 @@ export class RuntimeMonitor extends BaseMonitor {
       }
 
       if (typeof current !== "function") {
+        // Eliminar o sustituir por un no-función solo es relevante si antes existía.
         if (typeof previous === "function") {
           this.EmitChange({ Target: target.Name, Phase: "removed" });
         }
@@ -139,6 +159,7 @@ export class RuntimeMonitor extends BaseMonitor {
     let current = value;
     for (let depth = 0; depth < MaxWrapperDepth && typeof current === "function"; depth++) {
       let inner: unknown;
+      // Leer las marcas puede ejecutar getters de la página (o un Proxy hostil): se aísla.
       try {
         inner = markers
           .map((marker) => (current as Record<string, unknown>)[marker])
@@ -157,6 +178,10 @@ export class RuntimeMonitor extends BaseMonitor {
     return false;
   }
 
+  /**
+   * Lee la referencia actual del objetivo. Retorna undefined si no existe o si leerla
+   * lanza (un getter hostil en window no debe interrumpir la verificación).
+   */
   private Read(target: RuntimeTarget): unknown {
     try {
       const owner = target.Owner(this.Context.Window);
@@ -166,6 +191,7 @@ export class RuntimeMonitor extends BaseMonitor {
     }
   }
 
+  /** Analiza si `value` parece la función nativa esperada para el objetivo. */
   private Analyze(target: RuntimeTarget, value: unknown): ReturnType<typeof AnalyzeFunction> {
     return AnalyzeFunction(value, {
       ExpectedName: target.Key,

@@ -11,7 +11,8 @@ import { ExpandServices, MergeOrigins, ResolveServices } from "./Services";
 
 /**
  * Límites de seguridad para valores numéricos configurables.
- * Evitan crecimiento ilimitado de memoria o polling agresivo.
+ * Evitan crecimiento ilimitado de memoria (MaxEvents, MaxFindings) o polling agresivo
+ * (IntervalMs de la verificación de integridad).
  */
 export const ConfigLimits = {
   MaxEvents: { Min: 10, Max: 100_000 },
@@ -19,6 +20,7 @@ export const ConfigLimits = {
   IntervalMs: { Min: 500, Max: 600_000 },
 } as const;
 
+/** Modos de consola válidos. */
 const ConsoleModes: readonly ConsoleMode[] = ["silent", "notice", "findings"];
 
 /**
@@ -46,12 +48,15 @@ function ResolveNotice(value: unknown, fallback: ConsoleNoticeText): ConsoleNoti
   return { Title: pick("Title"), Message: pick("Message") };
 }
 
+/** Preset indicado si existe; si no, DefaultPreset ("balanced"). */
 function ResolvePreset(value: unknown): GuardPreset {
   return AvailablePresets.includes(value as GuardPreset) ? (value as GuardPreset) : DefaultPreset;
 }
 
 /**
- * Filtra pesos personalizados dejando solo números finitos.
+ * Filtra pesos personalizados dejando solo números finitos. No valida los nombres de
+ * señal ni el rango: un nombre desconocido simplemente no se usa, y los pesos negativos
+ * son válidos (restan riesgo, como "csp.report-only").
  */
 function ResolveWeights(value: unknown): ResolvedConfig["Risk"]["Weights"] {
   if (typeof value !== "object" || value === null) {
@@ -69,6 +74,9 @@ function ResolveWeights(value: unknown): ResolvedConfig["Risk"]["Weights"] {
 /**
  * Combina la configuración del usuario con el preset elegido.
  * Es tolerante a entradas inválidas: nunca lanza excepciones.
+ *
+ * Orden de precedencia: valor válido del usuario > valor del preset. Las listas de
+ * orígenes del usuario se completan con las que aportan los servicios declarados.
  */
 export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
   const base = GetPresetConfig(ResolvePreset(config.Preset));
@@ -79,6 +87,8 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
   return {
     Preset: base.Preset,
     Console: ResolveConsoleMode(config.Console, base.Console),
+    // No hay opción propia para la consola: si el usuario fija Risk.MinSeverity, la
+    // consola lo sigue; si no, usa el valor del preset (p. ej. medium en forensic).
     ConsoleMinSeverity: ResolveSeverity(config.Risk?.MinSeverity, base.ConsoleMinSeverity),
     Notice: ResolveNotice(config.Notice, base.Notice),
     Monitors: {
@@ -102,6 +112,7 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
         ResolveOrigins(config.Network?.AllowedOrigins),
         contributed.Network,
       ),
+      // Los servicios nunca aportan orígenes bloqueados: solo los define el usuario.
       BlockedOrigins: ResolveOrigins(config.Network?.BlockedOrigins),
     },
     Dom: {
@@ -134,12 +145,15 @@ export function ResolveConfig(config: BrowserGuardConfig = {}): ResolvedConfig {
         ConfigLimits.IntervalMs.Min,
         ConfigLimits.IntervalMs.Max,
       ),
+      // Solo de servicios declarados: las marcas son falsificables, así que no se aceptan
+      // marcas arbitrarias desde la configuración.
       TrustedWrapperMarkers: contributed.WrapperMarkers,
     },
     Risk: {
       MinSeverity: ResolveSeverity(config.Risk?.MinSeverity, base.Risk.MinSeverity),
       Weights: ResolveWeights(config.Risk?.Weights),
     },
+    // La profundidad del stack no es configurable: la define el preset.
     Stack: { ...base.Stack },
   };
 }

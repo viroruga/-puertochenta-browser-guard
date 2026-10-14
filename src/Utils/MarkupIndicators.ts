@@ -1,6 +1,7 @@
 /**
  * Análisis de strings que llegan a sinks peligrosos (innerHTML, document.write,
- * setTimeout con código, setAttribute...).
+ * setTimeout con código, setAttribute...). Lo usa SinkMonitor para decidir si una
+ * escritura merece un evento "dom.sink" y con qué indicadores.
  *
  * Retorna solo NOMBRES de indicadores, nunca fragmentos del contenido: el HTML puede
  * contener datos personales y no debe registrarse.
@@ -9,6 +10,18 @@
  * ejecutar expresiones regulares, y se analiza como máximo MaxAnalyzedLength caracteres.
  */
 
+/**
+ * Indicador de riesgo en contenido destinado a un sink:
+ * - script-tag: etiqueta <script>.
+ * - auto-event-handler: handler que se ejecuta sin interacción (onerror, onload...).
+ * - event-handler: cualquier otro atributo on*.
+ * - javascript-url: esquema "javascript:" no trivial (también ofuscado con entidades).
+ * - embedded-content: iframe/object/embed/frame/base o srcdoc.
+ * - sensitive-access: acceso a cookies/storage o técnicas de exfiltración y ofuscación.
+ * - probe: prueba de concepto típica (alert(1), debugger...).
+ * - url-reflected: contiene un valor sospechoso de la URL actual (DOM XSS reflejado).
+ * - string-code: código pasado como string a setTimeout/setInterval.
+ */
 export type MarkupIndicator =
   | "script-tag"
   | "auto-event-handler"
@@ -39,20 +52,33 @@ const MinReflectedLength = 6;
 const MaybeDangerousMarkup =
   /<script|[\s/"']on[a-z]{3,}\s*=|javascript|&#|<(?:iframe|object|embed|frame|base)\b|srcdoc/i;
 
+/** Etiqueta <script> (\b evita coincidir con otras etiquetas que empiezan igual). */
 const ScriptTag = /<script\b/i;
 
-/** Handlers que se ejecutan sin interacción del usuario: los de los payloads clásicos. */
+/**
+ * Handlers que se ejecutan sin interacción del usuario: los de los payloads clásicos.
+ * Exige que el atributo esté dentro de una etiqueta ("<img ... onerror=") y precedido de
+ * espacio, "/" o comilla, que el parser HTML acepta como separador de atributos.
+ */
 const AutoEventHandler =
   /<[a-z][^>]*?[\s/"'](on(?:error|load|focus|focusin|animationstart|animationend|transitionend|toggle|begin|pageshow|loadstart|canplay|scroll))\s*=/i;
 
+/** Cualquier atributo on* (3+ letras) dentro de una etiqueta. */
 const EventHandler = /<[a-z][^>]*?[\s/"']on[a-z]{3,}\s*=/i;
 
-/** "javascript:" en texto plano o codificado con entidades (ofuscación). */
+/**
+ * "javascript:" en texto plano o con la "j" codificada como entidad decimal o hexadecimal
+ * (ofuscación). Es global (/g) porque HasDangerousJavascript recorre todas las apariciones.
+ */
 const JavascriptScheme = /(?:javascript|&#0*106;?avascript|&#x0*6a;?avascript)\s*:/gi;
 
-/** Usos inofensivos habituales: href="javascript:void(0)" o "javascript:;". */
+/**
+ * Usos inofensivos habituales: href="javascript:void(0)" o "javascript:;". Se evalúa
+ * sobre lo que sigue a "javascript:" y debe terminar en comilla, ">" o fin de texto.
+ */
 const HarmlessJavascript = /^\s*(?:void\s*\(?\s*0\s*\)?\s*;?|;)?\s*(?:["'>]|$)/i;
 
+/** Contenido capaz de cargar otro documento o de cambiar la base de las URLs relativas. */
 const EmbeddedContent = /<(?:iframe|object|embed|frame|base)\b|\bsrcdoc\s*=/i;
 
 /** Acceso a datos sensibles o técnicas típicas de exfiltración y ofuscación. */
@@ -77,13 +103,20 @@ const UrlAttributes: ReadonlySet<string> = new Set([
   "poster",
 ]);
 
+/** Trunca a MaxAnalyzedLength para acotar el costo de las expresiones regulares. */
 function Limit(value: string): string {
   return value.length > MaxAnalyzedLength ? value.slice(0, MaxAnalyzedLength) : value;
 }
 
+/**
+ * Indica si alguna aparición de "javascript:" no es un uso inofensivo. Se revisan todas:
+ * un href="javascript:void(0)" no debe ocultar otra aparición con código real.
+ */
 function HasDangerousJavascript(text: string): boolean {
+  // La regex es global y compartida: lastIndex debe reiniciarse en cada llamada.
   JavascriptScheme.lastIndex = 0;
   for (let match = JavascriptScheme.exec(text); match; match = JavascriptScheme.exec(text)) {
+    // 40 caracteres alcanzan para reconocer los usos inofensivos, que son cortos.
     const rest = text.slice(match.index + match[0].length, match.index + match[0].length + 40);
     if (!HarmlessJavascript.test(rest)) {
       return true;
@@ -92,6 +125,10 @@ function HasDangerousJavascript(text: string): boolean {
   return false;
 }
 
+/**
+ * Decodifica un valor de query/hash ("+" como espacio). Si la codificación es inválida
+ * (decodeURIComponent lanza URIError) retorna el valor sin decodificar.
+ */
 function SafeDecode(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, " "));
@@ -100,6 +137,7 @@ function SafeDecode(value: string): string {
   }
 }
 
+// Caché de un solo elemento: la URL cambia poco y los sinks se escriben muy seguido.
 let CachedHref: string | null = null;
 let CachedValues: readonly string[] = [];
 
@@ -123,11 +161,14 @@ export function SuspiciousUrlValues(href: string | null): readonly string[] {
       : href.slice(queryStart + 1, hashStart > queryStart ? hashStart : undefined);
   const hash = hashStart === -1 ? "" : href.slice(hashStart + 1);
 
+  // Los hash de las SPA suelen tener sus propios "?" y "&" ("#/ruta?x=1&y=2").
   for (const part of `${query}&${hash}`.split(/[&#?]/)) {
     const separator = part.indexOf("=");
+    // Se prueba el valor y también el par completo, por si se refleja "clave=valor".
     const candidates = separator === -1 ? [part] : [part.slice(separator + 1), part];
     for (const candidate of candidates) {
       const value = SafeDecode(candidate);
+      // Valores cortos o sin caracteres activos coincidirían por azar con HTML legítimo.
       if (value.length >= MinReflectedLength && SuspiciousValue.test(value)) {
         values.add(value);
       }
@@ -157,7 +198,9 @@ function ContentIndicators(text: string, pageHref: PageHref): MarkupIndicator[] 
 }
 
 /**
- * Analiza HTML destinado a un sink. Retorna null si no hay indicadores.
+ * Analiza HTML destinado a un sink (innerHTML, document.write, srcdoc...). Retorna null
+ * si no hay estructura ejecutable; los indicadores de contenido (sensitive-access, probe,
+ * url-reflected) solo se agregan cuando ya hay al menos uno estructural.
  */
 export function AnalyzeMarkup(markup: string, pageHref: PageHref): MarkupIndicator[] | null {
   // Prefiltros: sin "<" ni "javascript"/entidades no puede haber HTML peligroso, y sin
@@ -200,6 +243,8 @@ export function AnalyzeCode(code: string, pageHref: PageHref): MarkupIndicator[]
 
 /**
  * Analiza un atributo asignado con setAttribute. Retorna null si es inofensivo.
+ * Los handlers on* siempre se reportan (asignar código como atributo ya es un sink);
+ * los atributos de URL, solo con un "javascript:" peligroso.
  */
 export function AnalyzeAttribute(
   name: string,
@@ -208,6 +253,7 @@ export function AnalyzeAttribute(
 ): MarkupIndicator[] | null {
   const attribute = name.toLowerCase();
   if (attribute.startsWith("on") && attribute.length > 4) {
+    // Reutiliza la regex de handlers automáticos sobre una etiqueta sintética.
     const auto = AutoEventHandler.test(`<x ${attribute}=`);
     return [
       auto ? "auto-event-handler" : "event-handler",

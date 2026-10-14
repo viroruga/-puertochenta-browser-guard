@@ -21,6 +21,9 @@ import type { GuardPlugin } from "../Types/Plugin";
  *
  * Si el endpoint no es válido (debe ser https, del mismo origen o localhost), el plugin
  * queda inactivo y GetStatus().Plugins lo indica.
+ *
+ * Registra un RemoteReporter (cola, lotes, reintentos) que recibe cada hallazgo emitido,
+ * y expone sus estadísticas en GetStatus().Remote.
  */
 export function RemoteReporting(config: RemoteConfig): GuardPlugin {
   return {
@@ -42,5 +45,6 @@ export function RemoteReporting(config: RemoteConfig): GuardPlugin {
   };
 }
 
+// Tipos públicos re-exportados para que este subpath sea autosuficiente.
 export type { RemoteConfig, RemoteMetadataValue } from "../Types/BrowserGuardConfig";
 export type { RemotePayload, RemoteStats } from "../Types/Remote";

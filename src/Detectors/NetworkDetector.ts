@@ -5,6 +5,7 @@ import type { Detector, FindingCandidate } from "../Types/Detector";
 import type { NetworkRequestData, NetworkTransport, SecurityEvent } from "../Types/SecurityEvent";
 import { ClassifyOrigin, IsInsecureTransport, ParseUrl } from "../Utils/UrlUtils";
 
+/** Nombre legible de cada canal, para títulos y descripciones. */
 const TransportLabels: Record<NetworkTransport, string> = {
   fetch: "fetch",
   xhr: "XMLHttpRequest",
@@ -17,6 +18,7 @@ const TransportLabels: Record<NetworkTransport, string> = {
   "service-worker": "service worker registration",
 };
 
+/** Título del hallazgo cuando el destino es un origen desconocido, por canal. */
 const UnknownTitles: Record<NetworkTransport, string> = {
   fetch: "Unknown outbound request",
   xhr: "Unknown outbound request",
@@ -29,7 +31,11 @@ const UnknownTitles: Record<NetworkTransport, string> = {
   "service-worker": "Service worker registered",
 };
 
-/** Query a partir de la cual se considera que transporta datos (?c=<cookies>...). */
+/**
+ * Largo de query (en caracteres) a partir del cual se considera que transporta datos
+ * (?c=<cookies>...). Por privacidad la URL llega sin query; el monitor solo informa su
+ * largo (QueryLength).
+ */
 export const LargeQueryLength = 64;
 
 /** Ventana durante la cual un hallazgo de red equivalente no se repite. */
@@ -51,12 +57,16 @@ const MaxDedupeEntries = 300;
  * - BlockedOrigins: critical.
  * - registro de un service worker: siempre low (da persistencia a quien lo controle).
  *
+ * Consume "network.request" (FetchMonitor, XhrMonitor, WebSocketMonitor, ChannelMonitor,
+ * ResourceMonitor). Los destinos sin origen de red (data:, blob:) no generan hallazgo.
+ *
  * Los hallazgos equivalentes se agrupan durante NetworkDedupeWindowMs (p. ej. una
  * galería de imágenes de un mismo origen). Solo detecta y reporta; nunca bloquea.
  */
 export class NetworkDetector implements Detector {
   public readonly Name = "NetworkDetector";
   public readonly Handles = ["network.request"] as const;
+  /** Última vez (timestamp del evento) que se emitió cada clave de deduplicación. */
   private readonly Recent = new Map<string, number>();
 
   public constructor(
@@ -76,6 +86,7 @@ export class NetworkDetector implements Detector {
     return candidate;
   }
 
+  /** Clasifica el destino y arma el hallazgo solo si es desconocido o bloqueado. */
   private AnalyzeDestination(data: NetworkRequestData): FindingCandidate | null {
     const classification = ClassifyOrigin(
       data.Origin,
@@ -98,6 +109,8 @@ export class NetworkDetector implements Detector {
       title = `Request to blocked origin via ${transport}`;
       description = `A ${transport} targeted ${origin}, which is listed in BlockedOrigins.`;
     } else {
+      // Un recurso pasivo de un CDN externo es habitual: pesa menos que una solicitud
+      // hecha por código, que puede llevar datos de la página.
       signals.push(
         data.Transport === "resource" ? "network.unknown-resource" : "network.unknown-origin",
       );
@@ -113,6 +126,7 @@ export class NetworkDetector implements Detector {
       description += ` The URL carries a large query string (${data.QueryLength} characters), a common exfiltration pattern.`;
     }
 
+    // Solo cuenta como inseguro si degrada una página https (http:/ws: desde https:).
     const url = ParseUrl(data.Url);
     if (url && IsInsecureTransport(url, this.Page.GetPageProtocol())) {
       signals.push("network.insecure-transport");
@@ -128,6 +142,11 @@ export class NetworkDetector implements Detector {
     };
   }
 
+  /**
+   * Todo registro de service worker se reporta, aunque sea del mismo origen: el script
+   * queda instalado e intercepta las solicitudes del sitio incluso después de cerrar la
+   * página, así que conviene que el equipo lo tenga a la vista.
+   */
   private AnalyzeServiceWorker(data: NetworkRequestData): FindingCandidate {
     return {
       Category: "network",
@@ -138,6 +157,10 @@ export class NetworkDetector implements Detector {
     };
   }
 
+  /**
+   * Evidencia compacta: solo incluye los campos que aportan algo. La URL ya llega
+   * sanitizada (sin query, fragmento ni credenciales).
+   */
   private Evidence(
     data: NetworkRequestData,
     classification: string | null,
@@ -165,6 +188,11 @@ export class NetworkDetector implements Detector {
     return evidence;
   }
 
+  /**
+   * Indica si un hallazgo equivalente (mismo canal, destino y señales) ya se emitió dentro
+   * de NetworkDedupeWindowMs; si no, lo registra. Las señales forman parte de la clave para
+   * que un cambio relevante (p. ej. aparece una query larga) sí se reporte.
+   */
   private IsDuplicate(data: NetworkRequestData, candidate: FindingCandidate, now: number): boolean {
     const key = `${data.Transport}|${data.Origin ?? data.Url}|${candidate.Signals.join(",")}`;
     const last = this.Recent.get(key);

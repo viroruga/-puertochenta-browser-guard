@@ -7,14 +7,18 @@ export const ActivityCheckpointsMs: readonly number[] = [10_000, 30_000, 60_000]
 /**
  * Eventos sintéticos a partir de los cuales se consideran señal de bot.
  * Algunas aplicaciones llaman a element.click() de forma legítima (pocas veces).
+ * BotDetector reutiliza este valor para interpretar los resúmenes.
  */
 export const SyntheticEventThreshold = 10;
 
+/** Contadores por categoría de interacción. */
 type CounterKey = "Pointer" | "Keyboard" | "Scroll" | "Touch";
 
+/** Eventos escuchados y el contador que incrementa cada uno. */
 const ObservedEvents: readonly (readonly [string, CounterKey])[] = [
   ["pointermove", "Pointer"],
   ["pointerdown", "Pointer"],
+  // mouse* además de pointer*: navegadores antiguos sin Pointer Events solo emiten estos.
   ["mousemove", "Pointer"],
   ["mousedown", "Pointer"],
   ["click", "Pointer"],
@@ -25,7 +29,8 @@ const ObservedEvents: readonly (readonly [string, CounterKey])[] = [
 ];
 
 /**
- * Cuenta la presencia de interacción humana.
+ * Cuenta la presencia de interacción humana y emite resúmenes `bot.activity`, que
+ * consume BotDetector. Lo registra AntiScrapingPlugin.
  *
  * Privacidad: solo incrementa contadores por tipo de evento. Nunca registra qué
  * tecla se pulsó, coordenadas, elementos objetivo ni tiempos individuales.
@@ -36,6 +41,7 @@ const ObservedEvents: readonly (readonly [string, CounterKey])[] = [
  */
 export class InteractionMonitor extends BaseMonitor {
   public readonly Name = "InteractionMonitor";
+  /** Contadores acumulados; Untrusted cuenta los eventos generados por scripts. */
   private readonly Counters: Record<CounterKey | "Untrusted", number> = {
     Pointer: 0,
     Keyboard: 0,
@@ -44,11 +50,14 @@ export class InteractionMonitor extends BaseMonitor {
     Untrusted: 0,
   };
   private StartedAt = 0;
+  /** Ya se emitió "first-interaction" (solo se emite una vez). */
   private ReportedHuman = false;
+  /** Ya se emitió "synthetic-threshold" (solo se emite una vez). */
   private ReportedSynthetic = false;
   // Ids de window.setTimeout (number en el navegador), independientes de los tipos de Node.
   private Timers: number[] = [];
   private ClearTimer: ((id: number) => void) | null = null;
+  /** Listener registrado por tipo de evento, para poder retirarlos en OnStop. */
   private readonly Listeners = new Map<string, EventListener>();
 
   protected OnStart(): boolean {
@@ -60,6 +69,8 @@ export class InteractionMonitor extends BaseMonitor {
         this.OnInput(event, counter);
       };
       this.Listeners.set(type, listener);
+      // Captura en window: se cuenta aunque la aplicación detenga la propagación, e
+      // incluye "scroll" de elementos internos (ese evento no burbujea hasta window).
       window.addEventListener(type, listener, { capture: true, passive: true });
     }
 
@@ -84,9 +95,13 @@ export class InteractionMonitor extends BaseMonitor {
       this.ClearTimer?.(timer);
     }
     this.Timers = [];
+    // Nota: Counters, ReportedHuman y ReportedSynthetic no se reinician; tras un
+    // Stop/Start los contadores siguen acumulando y no se reemiten los avisos únicos.
   }
 
   private OnInput(event: Event, counter: CounterKey): void {
+    // isTrusted es false para eventos creados con dispatchEvent/click() desde scripts,
+    // y no se puede falsificar desde la página.
     if (!event.isTrusted) {
       this.Counters.Untrusted++;
       if (!this.ReportedSynthetic && this.Counters.Untrusted >= SyntheticEventThreshold) {
@@ -103,11 +118,13 @@ export class InteractionMonitor extends BaseMonitor {
     }
   }
 
+  /** Emite un resumen con los contadores actuales (solo números, nunca detalles). */
   private Emit(reason: BotActivityReason): void {
     const data: BotActivityData = {
       Reason: reason,
       ElapsedMs: Date.now() - this.StartedAt,
       ...this.Counters,
+      // Una pestaña en segundo plano no recibe interacción: no debe contar como bot.
       Visible: this.Context.Window.document.visibilityState !== "hidden",
     };
     this.Context.Emit("bot.activity", this.Name, data);

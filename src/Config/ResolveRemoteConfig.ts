@@ -10,6 +10,14 @@ import {
 
 /**
  * Límites del envío remoto. Acotan memoria, tamaño de payload y frecuencia.
+ *
+ * - BatchSize: hallazgos por envío.
+ * - FlushIntervalMs: espera máxima antes de enviar un lote incompleto.
+ * - MaxQueue: hallazgos pendientes en memoria; si el backend no responde, se descartan
+ *   los más antiguos en lugar de crecer sin límite.
+ * - MaxRetries: reintentos por lote ante errores de red o del servidor.
+ * - MaxHeaders / MaxMetadataKeys / MaxMetadataLength: acotan lo que se agrega a cada
+ *   envío.
  */
 export const RemoteLimits = {
   BatchSize: { Min: 1, Max: 100, Default: 20 },
@@ -21,11 +29,17 @@ export const RemoteLimits = {
   MaxMetadataLength: 200,
 } as const;
 
+/**
+ * Headers propios para el envío (p. ej. una API key). Descarta nombres inválidos y
+ * valores con CR/LF: Headers lanzaría con ellos, y rechazarlos también cierra la puerta a
+ * inyectar headers adicionales.
+ */
 function ResolveHeaders(value: unknown): Record<string, string> {
   const headers: Record<string, string> = {};
   if (!IsPlainObject(value)) {
     return headers;
   }
+  // El límite se aplica antes de filtrar: entradas inválidas también consumen cupo.
   for (const [name, header] of Object.entries(value).slice(0, RemoteLimits.MaxHeaders)) {
     if (IsValidHeaderName(name) && typeof header === "string" && !/[\r\n]/.test(header)) {
       headers[name] = header;
@@ -34,6 +48,10 @@ function ResolveHeaders(value: unknown): Record<string, string> {
   return headers;
 }
 
+/**
+ * Metadatos fijos que acompañan cada envío (versión de la app, entorno, ...). Solo valores
+ * primitivos serializables; los strings se recortan para acotar el tamaño del payload.
+ */
 function ResolveMetadata(value: unknown): Record<string, RemoteMetadataValue> {
   const metadata: Record<string, RemoteMetadataValue> = {};
   if (!IsPlainObject(value)) {
@@ -55,6 +73,10 @@ function ResolveMetadata(value: unknown): Record<string, RemoteMetadataValue> {
 /**
  * Resuelve la configuración remota. Retorna null (envío deshabilitado) si no hay
  * configuración o el endpoint no es válido. Nunca lanza.
+ *
+ * El endpoint debe ser https, del mismo origen que la página o localhost (ver
+ * ResolveEndpoint): los hallazgos describen la seguridad del sitio y no deben viajar en
+ * texto plano. `pageHref` resuelve endpoints relativos (por defecto, la URL actual).
  */
 export function ResolveRemoteConfig(
   value: unknown,
@@ -97,6 +119,8 @@ export function ResolveRemoteConfig(
     ),
     Headers: ResolveHeaders(value.Headers),
     Metadata: ResolveMetadata(value.Metadata),
+    // Opt-out de privacidad: permiten no enviar el stack, la evidencia o la ruta de la
+    // página si el backend no los necesita.
     IncludeStack: ResolveBoolean(value.IncludeStack, true),
     IncludeEvidence: ResolveBoolean(value.IncludeEvidence, true),
     IncludePagePath: ResolveBoolean(value.IncludePagePath, true),

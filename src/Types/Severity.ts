@@ -1,5 +1,7 @@
 /**
- * Niveles de severidad soportados, ordenados de menor a mayor.
+ * Niveles de severidad soportados, ordenados de menor a mayor. RiskEngine la deriva del
+ * puntaje de riesgo; los umbrales de configuración (Risk.MinSeverity, MinSeverity del
+ * envío remoto) la comparan con IsSeverityAtLeast.
  */
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 

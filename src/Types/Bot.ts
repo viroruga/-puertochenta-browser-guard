@@ -1,4 +1,10 @@
 /**
+ * Tipos públicos del plugin AntiScraping: veredicto de la sesión y estado de la prueba de
+ * trabajo. Los produce BotSession / AntiScrapingController y los recibe la aplicación
+ * (evento "Bot", GetBotAssessment(), GetStatus().Bot).
+ */
+
+/**
  * Veredicto de la sesión respecto a automatización / scraping.
  * - unknown: sin evidencia suficiente todavía.
  * - human: se observó interacción humana y no hay señales relevantes.
@@ -25,7 +31,9 @@ export interface BotAssessment {
   Score: number;
   /** Señales observadas durante la sesión. */
   Signals: string[];
+  /** Momento de la última reevaluación, en ms desde epoch. */
   UpdatedAt: number;
+  /** Estado de la prueba de trabajo del desafío del servidor. */
   Proof: ProofState;
 }
 

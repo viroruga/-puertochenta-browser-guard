@@ -1,3 +1,8 @@
+/**
+ * Análisis heurístico de funciones: ¿esta función sigue siendo la nativa del navegador
+ * o fue reemplazada por un wrapper? Lo usan RuntimeMonitor y PrototypeMonitor para
+ * caracterizar cambios, y RuntimeIntegrityDetector para puntuarlos.
+ */
 import type { FunctionAnalysis } from "../Types/SecurityEvent";
 
 /**
@@ -7,15 +12,22 @@ import type { FunctionAnalysis } from "../Types/SecurityEvent";
  */
 // eslint-disable-next-line @typescript-eslint/unbound-method -- Se conserva la referencia para compararla por identidad.
 const OriginalToString = Function.prototype.toString;
+// call.bind deja la invocación fijada desde ya: un reemplazo posterior de
+// Function.prototype.call tampoco afecta a CallNativeToString.
 const CallNativeToString = Function.prototype.call.bind(OriginalToString) as (
   fn: unknown,
 ) => string;
 
-/** Cuerpo de función nativa: "function fetch() { [native code] }". */
+/**
+ * Cuerpo de función nativa: "function fetch() { [native code] }". Admite nombre vacío
+ * (funciones nativas anónimas, p. ej. resultado de bind) y los espacios y saltos de
+ * línea que agrega cada motor.
+ */
 const NativeBodyPattern = /^function\s*[\w$]*\s*\(\s*\)\s*\{\s*\[native code\]\s*\}\s*$/;
 
 /**
- * Obtiene el código fuente de una función usando el toString capturado.
+ * Obtiene el código fuente de una función usando el toString capturado. Retorna null si
+ * toString lanza (p. ej. un Proxy revocado).
  */
 function SafeSource(fn: unknown): string | null {
   try {
@@ -84,10 +96,13 @@ export function AnalyzeFunction(
     signals.push("name-mismatch");
   }
 
+  // No suma ni resta puntaje: es un estado global, no una propiedad de esta función.
   if (IsToStringTampered()) {
     signals.push("tostring-tampered");
   }
 
+  // El código fuente es condición necesaria; de las otras tres señales se tolera que
+  // falle una (p. ej. un `name` distinto en algún motor) para evitar falsos positivos.
   const looksNative = !signals.includes("non-native-source") && score >= maxScore - 1;
   // La confianza refleja cuántas señales coinciden con el veredicto.
   const confidence = looksNative ? score / maxScore : (maxScore - score + 1) / (maxScore + 1);

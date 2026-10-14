@@ -3,10 +3,14 @@ import { BaseMonitor } from "./BaseMonitor";
 import { CreateNetworkRequestData, ReadTargetUrl } from "./NetworkEventFactory";
 
 /**
- * Observa la creación de conexiones mediante `new WebSocket()`.
+ * Observa la creación de conexiones mediante `new WebSocket()` y emite `network.request`
+ * (transporte "websocket"), que consumen NetworkDetector y BotDetector.
  *
  * El constructor se intercepta con un Proxy, por lo que `instanceof WebSocket`,
  * las constantes estáticas (OPEN, CLOSED, ...) y las subclases siguen funcionando.
+ *
+ * Privacidad: la URL se sanea (los tokens suelen viajar en la query de la conexión) y
+ * solo se registran los subprotocolos declarados.
  *
  * En esta versión no se inspeccionan mensajes. Para hacerlo en el futuro, el hook
  * BeforeConstruct puede ampliarse a un AfterConstruct que reciba la instancia y
@@ -42,6 +46,8 @@ export class WebSocketMonitor extends BaseMonitor {
 
   private OnConstruct(args: readonly unknown[], stack: string | undefined): void {
     const [url, protocols] = args;
+    // El segundo argumento puede ser un string o un array; se descartan los no-string
+    // para no convertir objetos arbitrarios (ejecutaría su toString()).
     const protocolList =
       typeof protocols === "string"
         ? [protocols]

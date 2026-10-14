@@ -2,7 +2,10 @@ import type { BotVerdict, SessionAssessment } from "../Types/Bot";
 import type { RiskEngine } from "./RiskEngine";
 import type { RiskSignal } from "./RiskSignals";
 
-/** Puntajes a partir de los cuales cambia el veredicto. */
+/**
+ * Puntajes a partir de los cuales cambia el veredicto. Son independientes de los
+ * umbrales de severidad de RiskEngine: miden la sesión acumulada, no un hallazgo.
+ */
 export const BotThresholds = { Suspicious: 40, Bot: 70 } as const;
 
 /**
@@ -25,12 +28,16 @@ const UncompensableSignals: ReadonlySet<RiskSignal> = new Set([
 /**
  * Acumula las señales de bot de la sesión y calcula el veredicto.
  *
+ * Pertenece al plugin AntiScraping: lo crea AntiScrapingController, que le pasa las
+ * señales de los candidatos de categoría "bot" y reacciona a cada cambio de veredicto.
+ *
  * El puntaje usa los mismos pesos que RiskEngine (configurables con Risk.Weights),
  * sobre el conjunto de señales distintas vistas en la sesión. La interacción humana
  * resta puntaje solo frente a señales pasivas (ver UncompensableSignals). Una vez
  * que la sesión se clasifica como "bot", el veredicto ya no retrocede.
  */
 export class BotSession {
+  /** Señales "bot.*" distintas vistas en la sesión (cada una cuenta una sola vez). */
   private readonly Signals = new Set<RiskSignal>();
   private Assessment: SessionAssessment = {
     Verdict: "unknown",
@@ -39,6 +46,10 @@ export class BotSession {
     UpdatedAt: Date.now(),
   };
 
+  /**
+   * @param Engine Motor de riesgo, para puntuar con los mismos pesos configurados.
+   * @param OnChange Se invoca con una copia de la evaluación cuando cambia el veredicto.
+   */
   public constructor(
     private readonly Engine: RiskEngine,
     private readonly OnChange: (assessment: SessionAssessment) => void,
@@ -46,6 +57,8 @@ export class BotSession {
 
   /**
    * Incorpora señales. Notifica solo si el veredicto cambió.
+   * Las señales que no son "bot.*" o que ya se vieron se ignoran: si no hay ninguna
+   * nueva, ni siquiera se recalcula (UpdatedAt no cambia).
    */
   public Add(signals: readonly RiskSignal[]): void {
     const fresh = signals.filter(
@@ -59,12 +72,15 @@ export class BotSession {
     }
 
     const previous = this.Assessment.Verdict;
+    // Ante cualquier señal incompensable, la interacción humana deja de restar.
     const uncompensable = [...this.Signals].some((signal) => UncompensableSignals.has(signal));
     const scored = [...this.Signals].filter(
       (signal) => !(uncompensable && signal === "bot.human-interaction"),
     );
     const score = this.Engine.Score(scored);
     this.Assessment = {
+      // "bot" es definitivo: un automatizador no debe poder "limpiarse" simulando
+      // interacción después de ser detectado.
       Verdict: previous === "bot" ? "bot" : this.Classify(score),
       Score: score,
       Signals: [...this.Signals],
@@ -75,10 +91,15 @@ export class BotSession {
     }
   }
 
+  /** Copia de la evaluación actual (el llamador no puede alterar el estado interno). */
   public Get(): SessionAssessment {
     return { ...this.Assessment, Signals: [...this.Assessment.Signals] };
   }
 
+  /**
+   * Veredicto para un puntaje. Por debajo de "suspicious", solo es "human" si hubo
+   * interacción real; si no, se mantiene "unknown" (falta de evidencia, no inocencia).
+   */
   private Classify(score: number): BotVerdict {
     if (score >= BotThresholds.Bot) {
       return "bot";

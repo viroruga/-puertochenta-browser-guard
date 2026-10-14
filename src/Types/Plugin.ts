@@ -14,12 +14,18 @@ import type { RemoteStats } from "./Remote";
  * capturar referencias originales (p. ej. fetch) antes de que se intercepten.
  */
 export interface PluginHost {
+  /** Configuración resuelta de BrowserGuard (solo lectura). */
   readonly Config: ResolvedConfig;
+  /** Contexto compartido: emisión de eventos, id de sesión, errores internos. */
   readonly Context: GuardContext;
+  /** Motor de riesgo, para puntuar candidatos propios. */
   readonly Engine: RiskEngine;
 
+  /** Registra un monitor; se inicia y detiene junto con los del núcleo. */
   AddMonitor(monitor: Monitor): void;
+  /** Suscribe un detector al EventBus interno. */
   AddDetector(detector: Detector): void;
+  /** Agrega un reporter que recibe cada hallazgo emitido. */
   AddReporter(reporter: Reporter): void;
 
   /** Recibe cada candidato producido por un detector, supere o no el umbral de reporte. */
@@ -41,6 +47,7 @@ export interface PluginHost {
  * las descargue.
  */
 export interface GuardPlugin {
+  /** Nombre único; aparece en GetStatus().Plugins. */
   readonly Name: string;
   /**
    * Instala el plugin. Retorna false si quedó inactivo (p. ej. configuración inválida);
@@ -54,5 +61,6 @@ export interface GuardPlugin {
  */
 export interface PluginStatus {
   Name: string;
+  /** Resultado de Setup(): false si el plugin quedó inactivo. */
   Active: boolean;
 }

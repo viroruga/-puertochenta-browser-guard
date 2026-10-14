@@ -2,6 +2,10 @@ import type { RiskSignal } from "../Core/RiskSignals";
 import type { Detector, FindingCandidate } from "../Types/Detector";
 import type { SecurityEvent, SinkData, SinkName } from "../Types/SecurityEvent";
 
+/**
+ * Indicador de SinkMonitor → señal de riesgo. Es un Record<string> (no exhaustivo) para
+ * que un indicador nuevo del monitor sin señal asignada se ignore en vez de fallar.
+ */
 const IndicatorSignals: Readonly<Record<string, RiskSignal>> = {
   "script-tag": "xss.script-tag",
   "auto-event-handler": "xss.auto-event-handler",
@@ -14,6 +18,7 @@ const IndicatorSignals: Readonly<Record<string, RiskSignal>> = {
   "string-code": "xss.string-code",
 };
 
+/** Texto de cada indicador para la descripción del hallazgo. */
 const IndicatorDescriptions: Readonly<Record<string, string>> = {
   "script-tag": "a <script> element",
   "auto-event-handler": "an event handler that runs without user interaction (onerror, onload...)",
@@ -26,7 +31,10 @@ const IndicatorDescriptions: Readonly<Record<string, string>> = {
   "string-code": "code passed as a string",
 };
 
-/** Sinks obsoletos o desaconsejados en sí mismos. */
+/**
+ * Sinks obsoletos o desaconsejados en sí mismos. Suman poco riesgo y solo cuando ya hay
+ * otro indicador: usar document.write no es, por sí solo, un ataque.
+ */
 const LegacySinks: ReadonlySet<SinkName> = new Set(["document.write"]);
 
 /**
@@ -35,6 +43,12 @@ const LegacySinks: ReadonlySet<SinkName> = new Set(["document.write"]);
  * No toda escritura es un ataque: un handler inline (onclick) es "low"; un handler que
  * se ejecuta solo (onerror) junto a una prueba como alert() es "high"; si además el
  * contenido proviene de la URL de la página (XSS reflejado en el DOM), es "critical".
+ *
+ * Consume "dom.sink" (SinkMonitor: innerHTML, outerHTML, insertAdjacentHTML,
+ * document.write, setTimeout/setInterval con string, ...). El monitor ya hace el trabajo
+ * pesado contra falsos positivos: solo emite escrituras con algún indicador, nunca
+ * incluye el contenido escrito (solo su largo) y deduplica escrituras equivalentes. Este
+ * detector traduce los indicadores a señales y descarta los que no conoce.
  */
 export class XssSinkDetector implements Detector {
   public readonly Name = "XssSinkDetector";
@@ -48,6 +62,7 @@ export class XssSinkDetector implements Detector {
     if (signals.length === 0) {
       return null;
     }
+    // Después del chequeo anterior a propósito: el sink legado solo agrava un indicador.
     if (LegacySinks.has(data.Sink)) {
       signals.push("xss.legacy-sink");
     }

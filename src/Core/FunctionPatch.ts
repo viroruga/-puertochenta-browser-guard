@@ -2,6 +2,13 @@ import { CallerStackFrom, RaiseStackTraceLimit, RestoreStackTraceLimit } from ".
 import type { GuardContext } from "./GuardContext";
 
 /**
+ * Primitiva de interceptación de BrowserGuard: la usan todos los monitores que
+ * observan llamadas a APIs del navegador (fetch, XHR, WebSocket, sinks de XSS,
+ * canales de exfiltración, realms...) y, a través de ellos, el header de veredicto
+ * del plugin AntiScraping.
+ */
+
+/**
  * Hooks de la interceptación. Los "Before" solo observan. TransformArgs puede
  * retornar argumentos nuevos (o null para no cambiar nada); se usa únicamente para
  * agregar el header de veredicto anti-scraping, que es opt-in. Si TransformArgs
@@ -63,11 +70,21 @@ interface PatchState<T> {
  * restaurar rompería su cadena; en ese caso el proxy queda inerte (passthrough).
  */
 export class FunctionPatch<T = undefined> {
+  /** Descriptor previo a la instalación; se reinstala tal cual al restaurar. */
   private OriginalDescriptor: PropertyDescriptor | null = null;
+  /** Función original (para el caso "value" sobre una propiedad accessor). */
   private OriginalValue: unknown = null;
+  /** Proxy instalado; null mientras no esté aplicado. Sirve para comparar por identidad. */
   private ProxyRef: object | null = null;
   private State: PatchState<T> = { Hooks: null, Context: null };
 
+  /**
+   * @param Owner Objeto que contiene la propiedad (p. ej. window o Element.prototype).
+   * @param Key Nombre de la propiedad a interceptar.
+   * @param Hooks Callbacks a ejecutar alrededor de la llamada original.
+   * @param Context Contexto donde se registran el proxy (función propia) y los errores.
+   * @param Part Parte de la propiedad a interceptar (por defecto, su valor).
+   */
   public constructor(
     private readonly Owner: object,
     private readonly Key: PropertyKey,
@@ -100,6 +117,7 @@ export class FunctionPatch<T = undefined> {
         const context = state.Context;
         const hook = hooks?.BeforeApply;
         if (hook && context) {
+          // Sin Inspect, el hook recibe undefined (T es undefined por defecto).
           let inspection: T | null = undefined as T;
           if (hooks.Inspect) {
             try {
@@ -122,6 +140,8 @@ export class FunctionPatch<T = undefined> {
             });
           }
         }
+        // TransformArgs se ejecuta aunque no haya BeforeApply. Si falla, se usan los
+        // argumentos originales: la llamada de la aplicación nunca se interrumpe.
         let finalArgs = args;
         const transform = state.Hooks?.TransformArgs;
         if (transform) {
@@ -131,6 +151,7 @@ export class FunctionPatch<T = undefined> {
             state.Context?.ReportInternalError(error);
           }
         }
+        // Fuera de try: un error de la función original debe llegar intacto a quien llamó.
         const result: unknown = Reflect.apply(original, thisArg, finalArgs);
         const after = state.Hooks?.AfterApply;
         if (after) {
@@ -167,8 +188,11 @@ export class FunctionPatch<T = undefined> {
     try {
       this.Install(descriptor, proxy);
     } catch {
+      // Propiedad congelada, objeto no extensible o setter que rechaza el valor.
       return false;
     }
+    // Verificación: un accessor con setter propio (polyfills) puede aceptar la asignación
+    // sin guardar el proxy. Solo se da por aplicado si realmente quedó instalado.
     if (this.ReadInstalled() !== proxy) {
       return false;
     }
@@ -177,12 +201,14 @@ export class FunctionPatch<T = undefined> {
     this.OriginalValue = target;
     this.ProxyRef = proxy;
     this.State = state;
+    // Para que RuntimeMonitor no reporte nuestro propio proxy como una modificación.
     this.Context.RegisterOwnFunction(proxy);
     return true;
   }
 
   /**
    * Deshace la interceptación dejando el entorno en su estado lógico original.
+   * Nunca lanza; es seguro llamarlo aunque Apply() no haya tenido éxito.
    */
   public Restore(): void {
     if (this.ProxyRef === null || this.OriginalDescriptor === null) {
@@ -210,6 +236,7 @@ export class FunctionPatch<T = undefined> {
     this.OriginalValue = null;
   }
 
+  /** Indica si el proxy está instalado (entre un Apply() exitoso y Restore()). */
   public IsApplied(): boolean {
     return this.ProxyRef !== null;
   }
@@ -218,7 +245,7 @@ export class FunctionPatch<T = undefined> {
    * Función a interceptar según la parte elegida, o undefined si no es interceptable.
    * - value: propiedad de datos (caso habitual) o accessor con setter (algunos
    *   polyfills y entornos como jsdom exponen globales así).
-   * - setter: el setter de una propiedad accessor configurable.
+   * - setter / getter: el accessor correspondiente de una propiedad configurable.
    */
   private ResolveTarget(descriptor: PropertyDescriptor): unknown {
     if (this.Part !== "value") {
@@ -236,6 +263,11 @@ export class FunctionPatch<T = undefined> {
       : undefined;
   }
 
+  /**
+   * Coloca el proxy en la parte elegida. Las propiedades de datos se redefinen
+   * conservando sus atributos (writable, enumerable, configurable); un accessor en
+   * modo "value" se asigna con su propio setter. Puede lanzar: Apply() lo controla.
+   */
   private Install(descriptor: PropertyDescriptor, proxy: object): void {
     if (this.Part === "setter") {
       Object.defineProperty(this.Owner, this.Key, {
@@ -264,6 +296,7 @@ export class FunctionPatch<T = undefined> {
   }
 }
 
+/** Indica si el descriptor es de una propiedad accessor (get/set) y no de datos. */
 function IsAccessor(descriptor: PropertyDescriptor): boolean {
   return descriptor.get !== undefined || descriptor.set !== undefined;
 }

@@ -20,10 +20,16 @@ function IsPlugin(value: unknown): value is GuardPlugin {
  * Instala los plugins y guarda lo que aportan: monitores, detectores, reporters,
  * listeners y proveedores de estado.
  *
+ * Es la implementación de PluginHost: BrowserGuard lo crea con config.Plugins, ejecuta
+ * Setup() antes de crear los monitores y luego toma Monitors/Detectors/Reporters para
+ * conectarlos al pipeline junto a los del núcleo. Los plugins oficiales son
+ * AntiScraping y RemoteReporting (rutas separadas del paquete).
+ *
  * Aislamiento: un plugin que falla en Setup() o en un listener no afecta a los demás
  * ni a la aplicación; queda inactivo y el error se contabiliza.
  */
 export class PluginManager {
+  /** Monitores aportados con AddMonitor; BrowserGuard los registra después de los del núcleo. */
   public readonly Monitors: Monitor[] = [];
   public readonly Detectors: Detector[] = [];
   public readonly Reporters: Reporter[] = [];
@@ -32,9 +38,15 @@ export class PluginManager {
   private readonly CandidateListeners: ((candidate: FindingCandidate) => void)[] = [];
   private readonly DisposeListeners: (() => void)[] = [];
   private Statuses: PluginStatus[] = [];
+  /** Proveedor del veredicto de bot (AntiScraping); el último registrado gana. */
   private BotProvider: (() => BotAssessment) | null = null;
+  /** Proveedor de contadores de envío remoto (RemoteReporting); el último registrado gana. */
   private RemoteProvider: (() => RemoteStats) | null = null;
 
+  /**
+   * @param plugins Valor de config.Plugins tal como lo pasó el usuario (sin validar).
+   * @param OnError Contabiliza los errores de los plugins sin propagarlos.
+   */
   public constructor(
     plugins: unknown,
     private readonly OnError: (error: unknown) => void,
@@ -44,6 +56,9 @@ export class PluginManager {
 
   /**
    * Ejecuta Setup() de cada plugin. Un nombre repetido se ignora (gana el primero).
+   * Debe llamarse una sola vez: lo aportado se acumula en las listas públicas.
+   *
+   * @param emitBot Publica el evento "Bot" y actualiza el snapshot (lo provee BrowserGuard).
    */
   public Setup(
     config: ResolvedConfig,
@@ -69,6 +84,8 @@ export class PluginManager {
       },
     };
 
+    // Nota: lo que un plugin agregó antes de lanzar en Setup() (monitores, listeners...)
+    // no se revierte; solo queda marcado como inactivo.
     const seen = new Set<string>();
     this.Statuses = this.Plugins.map((plugin) => {
       if (seen.has(plugin.Name)) {
@@ -84,6 +101,10 @@ export class PluginManager {
     });
   }
 
+  /**
+   * Entrega a los plugins cada candidato de un detector, haya generado o no un hallazgo
+   * (AntiScraping necesita las señales de bot aunque no alcancen Risk.MinSeverity).
+   */
   public NotifyCandidate(candidate: FindingCandidate): void {
     for (const listener of this.CandidateListeners) {
       try {
@@ -94,6 +115,7 @@ export class PluginManager {
     }
   }
 
+  /** Ejecuta los OnDispose de los plugins (una sola vez: la lista se vacía). */
   public Dispose(): void {
     for (const listener of this.DisposeListeners.splice(0)) {
       try {
@@ -104,14 +126,17 @@ export class PluginManager {
     }
   }
 
+  /** Veredicto del proveedor de bot, o null si ningún plugin lo registró. */
   public GetBotAssessment(): BotAssessment | null {
     return this.BotProvider?.() ?? null;
   }
 
+  /** Contadores de envío remoto, o null si ningún plugin los registró. */
   public GetRemoteStats(): RemoteStats | null {
     return this.RemoteProvider?.() ?? null;
   }
 
+  /** Estado de cada plugin válido (copia), en el orden de la configuración. */
   public GetStatus(): PluginStatus[] {
     return this.Statuses.map((status) => ({ ...status }));
   }

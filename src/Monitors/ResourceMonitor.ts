@@ -3,7 +3,8 @@ import { CreateNetworkRequestData } from "./NetworkEventFactory";
 
 /**
  * Tipos de iniciador que ya cubren otros monitores (con stack trace): se omiten para no
- * duplicar hallazgos. "script" lo cubre DomMonitor (scripts insertados dinámicamente).
+ * duplicar hallazgos. "script" lo cubre DomMonitor (scripts insertados dinámicamente);
+ * "fetch"/"xmlhttprequest"/"beacon", FetchMonitor, XhrMonitor y ChannelMonitor.
  */
 const CoveredInitiators: ReadonlySet<string> = new Set([
   "fetch",
@@ -14,13 +15,18 @@ const CoveredInitiators: ReadonlySet<string> = new Set([
 
 /**
  * Observa la carga de recursos (imágenes, CSS, fuentes, medios, iframes...) mediante
- * PerformanceObserver.
+ * PerformanceObserver y emite `network.request` (transporte "resource"), que consumen
+ * NetworkDetector y BotDetector.
  *
  * Por qué PerformanceObserver: no modifica ninguna API de la página y cubre cualquier
  * forma de iniciar la carga (new Image().src = ..., HTML insertado, CSS url(), ...),
  * que es como suele exfiltrarse información sin fetch/XHR. No ofrece stack trace.
  *
- * Solo se observan recursos cargados después de Start() (sin el buffer previo).
+ * Solo se observan recursos cargados después de Start() (sin el buffer previo): los
+ * recursos de la carga inicial forman parte de la página, no de un comportamiento nuevo.
+ *
+ * Privacidad: `entry.name` es la URL completa; se sanea igual que el resto de eventos de
+ * red (sin query ni fragmento, solo su longitud).
  */
 export class ResourceMonitor extends BaseMonitor {
   public readonly Name = "ResourceMonitor";
@@ -57,6 +63,7 @@ export class ResourceMonitor extends BaseMonitor {
       if (CoveredInitiators.has(initiator)) {
         continue;
       }
+      // Sin stack: el callback del observer es asíncrono y no conserva quién inició la carga.
       this.Context.Emit(
         "network.request",
         this.Name,

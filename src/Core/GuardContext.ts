@@ -12,15 +12,24 @@ import { CreateId, CreateSessionId } from "../Utils/IdGenerator";
  */
 export const MaxPendingEvents = 1000;
 
+/** Evento de cualquier tipo, tal como circula por la cola. */
 type AnySecurityEvent = TypedSecurityEvent<SecurityEventType>;
 
 /**
  * Decide qué header agregar a una solicitud saliente (o ninguno).
+ * Recibe la URL tal como la pasó la aplicación (null si no se pudo determinar) y
+ * retorna el par [nombre, valor]. Lo registra AntiScrapingController; lo consultan
+ * los monitores de fetch y XHR.
  */
 export type RequestHeaderProvider = (url: string | null) => readonly [string, string] | null;
 
 /**
  * Contexto compartido por monitores durante una sesión de BrowserGuard.
+ *
+ * Es el único canal entre los monitores y el resto del pipeline: los monitores no
+ * conocen el EventBus ni los detectores, solo llaman a Emit(). BrowserGuard lo crea en
+ * Start() con la función que despacha cada evento al EventBus interno; también lo
+ * reciben los plugins (PluginHost.Context) y los detectores como PageInfo.
  *
  * Responsabilidades:
  * - exponer la configuración resuelta y el objeto window observado;
@@ -34,9 +43,15 @@ export type RequestHeaderProvider = (url: string | null) => readonly [string, st
  * URL de la página y errores.
  */
 export class GuardContext {
+  /**
+   * Proxies y funciones creados por BrowserGuard. WeakSet: no impide que se liberen
+   * cuando dejan de estar instalados.
+   */
   private readonly OwnFunctions = new WeakSet();
+  /** Cola de eventos a despachar en el próximo microtask (solo en el contexto raíz). */
   private Pending: AnySecurityEvent[] = [];
   private FlushScheduled = false;
+  /** false tras Dispose(): Emit y GetRequestHeader pasan a no hacer nada. */
   private Active = true;
   private DroppedCount = 0;
   private ErrorCount = 0;
@@ -45,6 +60,12 @@ export class GuardContext {
   /** Identificador aleatorio de esta sesión de BrowserGuard (compartido con los hijos). */
   public readonly SessionId: string;
 
+  /**
+   * @param Config Configuración resuelta (compartida con los contextos hijos).
+   * @param Window Realm observado: window principal o el de un iframe.
+   * @param Dispatch Entrega un evento al pipeline; se invoca fuera de la llamada de la app.
+   * @param Parent Contexto principal, si este es un contexto hijo.
+   */
   public constructor(
     public readonly Config: ResolvedConfig,
     public readonly Window: Window & typeof globalThis,
@@ -75,16 +96,26 @@ export class GuardContext {
     return this.Parent ? this.Parent.GetPageUrl() : this.Window.location.href;
   }
 
+  /** Origen de la página principal (no del iframe): base de "mismo origen" para detectores. */
   public GetPageOrigin(): string {
     return this.Parent ? this.Parent.GetPageOrigin() : this.Window.location.origin;
   }
 
+  /** Protocolo de la página principal (p. ej. para detectar transporte inseguro). */
   public GetPageProtocol(): string {
     return this.Parent ? this.Parent.GetPageProtocol() : this.Window.location.protocol;
   }
 
   /**
    * Crea y encola un evento. Nunca lanza.
+   *
+   * Se llama desde dentro de las APIs interceptadas, por lo que hace el mínimo trabajo
+   * posible: el análisis ocurre después, en Flush().
+   *
+   * @param type Tipo del evento; determina la forma de `data`.
+   * @param source Nombre del monitor que lo emite.
+   * @param data Datos ya saneados por el monitor (nunca contenido sensible).
+   * @param stack Stack del código que originó la acción, si el monitor lo capturó.
    */
   public Emit<K extends SecurityEventType>(
     type: K,
@@ -99,6 +130,8 @@ export class GuardContext {
       this.Parent.Emit(type, source, data, stack);
       return;
     }
+    // Límite de memoria: un script hostil podría provocar millones de eventos para
+    // saturar la cola. El descarte queda visible en GetStatus().DroppedEvents.
     if (this.Pending.length >= MaxPendingEvents) {
       this.DroppedCount++;
       return;
@@ -119,12 +152,17 @@ export class GuardContext {
 
   /**
    * Procesa inmediatamente los eventos pendientes.
+   * Normalmente lo invoca el microtask programado; BrowserGuard.Stop() lo llama
+   * directamente para no perder los eventos capturados antes de detenerse.
    */
   public Flush(): void {
     this.FlushScheduled = false;
+    // Se toma el lote y se vacía la cola antes de despachar: los eventos que se emitan
+    // durante el despacho van a un lote nuevo (con su propio microtask).
     const batch = this.Pending;
     this.Pending = [];
     for (const event of batch) {
+      // Un detector o reporter puede haber detenido BrowserGuard durante el lote.
       if (!this.Active) {
         return;
       }
@@ -145,6 +183,7 @@ export class GuardContext {
 
   /**
    * Header a agregar a una solicitud, o null. Nunca lanza.
+   * En un contexto hijo delega en el principal, que es donde se registra el proveedor.
    */
   public GetRequestHeader(url: string | null): readonly [string, string] | null {
     if (this.Parent) {
@@ -161,6 +200,10 @@ export class GuardContext {
     }
   }
 
+  /**
+   * Marca una función (o proxy) como creada por BrowserGuard, para que RuntimeMonitor
+   * no la confunda con una modificación hecha por terceros.
+   */
   public RegisterOwnFunction(fn: object): void {
     if (this.Parent) {
       this.Parent.RegisterOwnFunction(fn);
@@ -169,10 +212,12 @@ export class GuardContext {
     this.OwnFunctions.add(fn);
   }
 
+  /** Indica si un valor fue registrado con RegisterOwnFunction (en cualquier realm). */
   public IsOwnFunction(value: unknown): boolean {
     if (this.Parent) {
       return this.Parent.IsOwnFunction(value);
     }
+    // WeakSet.has solo admite objetos: los primitivos nunca son funciones propias.
     return typeof value === "function" || (typeof value === "object" && value !== null)
       ? this.OwnFunctions.has(value)
       : false;
@@ -180,6 +225,8 @@ export class GuardContext {
 
   /**
    * Registra un error interno. Nunca se propaga a la aplicación host.
+   * Solo se cuenta (GetStatus().InternalErrors): el error puede contener datos de la
+   * aplicación y no se retiene ni se imprime.
    */
   public ReportInternalError(error: unknown): void {
     if (this.Parent) {
@@ -200,10 +247,12 @@ export class GuardContext {
     }
   }
 
+  /** Eventos descartados por cola llena desde el inicio. */
   public get DroppedEvents(): number {
     return this.DroppedCount;
   }
 
+  /** Errores internos contabilizados (incluye los de los contextos hijos). */
   public get InternalErrors(): number {
     return this.ErrorCount;
   }
@@ -220,6 +269,11 @@ export class GuardContext {
     this.Pending = [];
   }
 
+  /**
+   * Programa un único Flush por lote. Microtask y no setTimeout: los eventos se
+   * procesan apenas termina el código síncrono de la aplicación, sin ceder el turno
+   * a otras tareas, y queueMicrotask no es una API que los monitores intercepten.
+   */
   private ScheduleFlush(): void {
     if (this.FlushScheduled) {
       return;

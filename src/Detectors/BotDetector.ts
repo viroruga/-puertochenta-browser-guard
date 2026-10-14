@@ -22,11 +22,16 @@ const PassiveTransports: ReadonlySet<NetworkTransport> = new Set([
   "service-worker",
 ]);
 
-/** Tiempo sin ninguna interacción (con la pestaña visible) que se considera señal. */
+/**
+ * Tiempo sin ninguna interacción (con la pestaña visible) que se considera señal.
+ * Es generoso a propósito: un usuario real puede leer un rato sin tocar nada, pero
+ * rara vez pasa medio minuto sin mover el puntero, hacer scroll ni teclear.
+ */
 export const NoInteractionAfterMs = 30_000;
 
 /**
- * Traduce los nombres de señal del monitor a señales de riesgo.
+ * Traduce los nombres de señal de AutomationMonitor a señales de riesgo. Los nombres
+ * desconocidos se ignoran (null) en lugar de inventar una señal sin peso definido.
  */
 function MapEnvironmentSignal(name: string): RiskSignal | null {
   if (name === "webdriver") {
@@ -57,14 +62,26 @@ function MapEnvironmentSignal(name: string): RiskSignal | null {
 /**
  * Detecta automatización y comportamiento de scraping.
  *
- * Analiza tres fuentes: señales del entorno (AutomationMonitor), resúmenes de
- * interacción (InteractionMonitor) y solicitudes de red (Fetch/Xhr/WebSocket).
- * Cada señal se reporta una sola vez por sesión. Las señales alimentan además el
- * veredicto de sesión (BotSession), aunque el hallazgo no supere el umbral de reporte.
+ * Lo registra el plugin AntiScraping (no forma parte del núcleo). Consume tres eventos:
+ * - "bot.environment" (AutomationMonitor): webdriver, headless, artefactos de frameworks
+ *   de automatización (critical/high) e inconsistencias del entorno ("bot.env-*", de
+ *   peso bajo: por sí solas no bastan para acusar a un navegador real);
+ * - "bot.activity" (InteractionMonitor): eventos sintéticos, ausencia de interacción o,
+ *   en sentido contrario, interacción humana confiable (señal de peso negativo);
+ * - "network.request": ráfagas de solicitudes y barridos secuenciales de ids.
+ *
+ * Evita falsos positivos y ruido así:
+ * - cada señal se reporta una sola vez por sesión (Reported);
+ * - los transportes pasivos (imágenes, formularios, ...) no cuentan para el ritmo;
+ * - la falta de interacción solo cuenta con la pestaña visible y sin scroll.
+ *
+ * Las señales alimentan además el veredicto de sesión (BotSession), aunque el hallazgo
+ * no supere el umbral de reporte.
  */
 export class BotDetector implements Detector {
   public readonly Name = "BotDetector";
   public readonly Handles = ["bot.environment", "bot.activity", "network.request"] as const;
+  /** Señales ya emitidas en esta sesión (deduplicación). */
   private readonly Reported = new Set<RiskSignal>();
   private readonly Tracker: RequestPatternTracker;
 
@@ -103,6 +120,8 @@ export class BotDetector implements Detector {
     if (signals.length === 0) {
       return null;
     }
+    // Basta una señal fuera de "bot.env-*" (webdriver, headless, artefacto) para hablar
+    // de automatización; solo con inconsistencias se describe como entorno sospechoso.
     const automation = signals.some((signal) => !signal.startsWith("bot.env-"));
     return {
       Category: "bot",
@@ -115,10 +134,16 @@ export class BotDetector implements Detector {
     };
   }
 
+  /**
+   * Evalúa un resumen de interacción. Los contadores del monitor son acumulativos, así
+   * que tras una interacción humana confiable la ausencia de interacción ya no se evalúa
+   * en checkpoints posteriores; la señal negativa se emite una sola vez (deduplicada).
+   */
   private AnalyzeActivity(data: BotActivityData): FindingCandidate | null {
     if (!this.Settings.Signals.Interaction) {
       return null;
     }
+    // Pointer/Keyboard/Touch cuentan solo eventos isTrusted; los sintéticos van en Untrusted.
     const human = data.Pointer + data.Keyboard + data.Touch;
     const candidates: RiskSignal[] = [];
     if (data.Untrusted >= SyntheticEventThreshold) {
@@ -127,6 +152,9 @@ export class BotDetector implements Detector {
     if (human > 0) {
       candidates.push("bot.human-interaction");
     } else if (
+      // Solo en los checkpoints temporales del monitor y con la pestaña visible: una
+      // pestaña en segundo plano sin interacción es normal. El scroll también descarta
+      // la señal, porque leer haciendo solo scroll es comportamiento humano habitual.
       data.Reason === "checkpoint" &&
       data.ElapsedMs >= NoInteractionAfterMs &&
       data.Scroll === 0 &&
@@ -153,6 +181,10 @@ export class BotDetector implements Detector {
     };
   }
 
+  /**
+   * Alimenta el RequestPatternTracker con solicitudes hechas por código. Se ignoran las
+   * que no tienen origen (data:, blob:, ...) y los transportes pasivos.
+   */
   private AnalyzeRequest(data: NetworkRequestData, timestamp: number): FindingCandidate | null {
     if (
       !this.Settings.Signals.RequestRate ||

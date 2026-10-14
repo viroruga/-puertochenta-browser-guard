@@ -8,7 +8,8 @@ import type {
 } from "../Types/SecurityEvent";
 
 /**
- * Funciones cuyo reemplazo permite ejecutar código arbitrario u ocultar wrappers.
+ * Funciones cuyo reemplazo permite ejecutar código arbitrario u ocultar wrappers
+ * (un Function.prototype.toString falso hace que cualquier wrapper parezca nativo).
  */
 export const CriticalRuntimeTargets: ReadonlySet<string> = new Set([
   "eval",
@@ -16,12 +17,14 @@ export const CriticalRuntimeTargets: ReadonlySet<string> = new Set([
   "Function.prototype.toString",
 ]);
 
+/** Señal base según cuándo se observó el cambio. */
 const PhaseSignals: Record<RuntimeChangePhase, RiskSignal> = {
   change: "runtime.modified",
   baseline: "runtime.preexisting",
   removed: "runtime.removed",
 };
 
+/** Fragmento de la descripción según la fase. */
 const PhaseDescriptions: Record<RuntimeChangePhase, string> = {
   change: "was replaced after BrowserGuard started",
   baseline: "was already modified when BrowserGuard started",
@@ -35,6 +38,14 @@ const PhaseDescriptions: Record<RuntimeChangePhase, string> = {
  * por una función que no parece nativa es más grave que uno por una función
  * nativa (p. ej. un bind) o un Proxy. Librerías legítimas de observabilidad también
  * envuelven fetch/XHR; por eso un reemplazo por sí solo es "medium" y no "critical".
+ *
+ * Consume:
+ * - "runtime.modified" (RuntimeMonitor): funciones críticas reemplazadas después de
+ *   iniciar (medium), ya modificadas al iniciar (low) o eliminadas (medium). Sumar
+ *   "no parece nativa" y "objetivo crítico" (eval, Function, toString) eleva a
+ *   high/critical. Los wrappers de servicios declarados (TrustedWrapperMarkers) los
+ *   filtra el monitor antes de emitir;
+ * - "runtime.realm" (RealmMonitor): acceso al realm de un iframe del mismo origen (low).
  */
 export class RuntimeIntegrityDetector implements Detector {
   public readonly Name = "RuntimeIntegrityDetector";
@@ -61,6 +72,10 @@ export class RuntimeIntegrityDetector implements Detector {
     };
   }
 
+  /**
+   * Combina la fase con el análisis de la nueva función. Sin Analysis (p. ej. eliminada o
+   * reemplazada por algo que no es función) solo cuentan la fase y el objetivo.
+   */
   private AnalyzeModification(data: RuntimeModificationData): FindingCandidate {
     const signals: RiskSignal[] = [PhaseSignals[data.Phase]];
 

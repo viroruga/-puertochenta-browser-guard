@@ -20,17 +20,20 @@ interface DescriptorSnapshot {
   Configurable: boolean | undefined;
 }
 
+/** Foto de un prototipo: clave propia (string o symbol) → descriptor. */
 type PrototypeSnapshot = Map<PropertyKey, DescriptorSnapshot>;
 
 /**
  * Límite de eventos por verificación: si un polyfill agrega decenas de métodos
- * de una vez, no se inunda el pipeline.
+ * de una vez, no se inunda el pipeline. Los cambios que exceden el límite no se
+ * reportan: el baseline se actualiza igualmente.
  */
 export const MaxChangesPerCheck = 50;
 
 /**
  * Prototipos monitoreados. Se usan los intrínsecos del realm donde se ejecuta
- * la librería, que es el mismo que el de la aplicación.
+ * la librería, que es el mismo que el de la aplicación (no los de Context.Window: este
+ * monitor no se replica en los iframes).
  */
 const Targets: readonly (readonly [MonitoredPrototype, object])[] = [
   ["Object.prototype", Object.prototype],
@@ -40,6 +43,7 @@ const Targets: readonly (readonly [MonitoredPrototype, object])[] = [
   ["Promise.prototype", Promise.prototype],
 ];
 
+/** Toma la foto de las propiedades propias (incluidas symbols y no enumerables). */
 function TakeSnapshot(target: object): PrototypeSnapshot {
   const snapshot: PrototypeSnapshot = new Map();
   for (const key of Reflect.ownKeys(target)) {
@@ -61,6 +65,7 @@ function TakeSnapshot(target: object): PrototypeSnapshot {
   return snapshot;
 }
 
+/** Compara dos descriptores por identidad de valores y por sus atributos. */
 function IsSameDescriptor(a: DescriptorSnapshot, b: DescriptorSnapshot): boolean {
   return (
     a.Value === b.Value &&
@@ -72,6 +77,7 @@ function IsSameDescriptor(a: DescriptorSnapshot, b: DescriptorSnapshot): boolean
   );
 }
 
+/** Tipo informado en el evento: "accessor" para getters/setters, si no `typeof` del valor. */
 function DescribeValueType(snapshot: DescriptorSnapshot): string {
   return snapshot.Get !== undefined || snapshot.Set !== undefined
     ? "accessor"
@@ -79,13 +85,18 @@ function DescribeValueType(snapshot: DescriptorSnapshot): string {
 }
 
 /**
- * Detecta cambios en Object/Array/Function/String/Promise.prototype.
+ * Detecta cambios en Object/Array/Function/String/Promise.prototype (prototype pollution,
+ * sobrescritura de métodos nativos) y emite `prototype.changed`, que consume
+ * PrototypePollutionDetector.
  *
  * Estrategia: no existe forma de observar prototipos nativos sin envolverlos
  * (lo cual alteraría el comportamiento), por lo que se toma un baseline al iniciar
  * y se compara periódicamente. La comparación es por referencia de descriptores
  * (~150 propiedades en total), se ejecuta en tiempo ocioso y con intervalo
  * configurable (por defecto 2-5 s según preset). Nunca se usa polling agresivo.
+ *
+ * Privacidad: el evento solo incluye el nombre de la propiedad y el tipo del valor; nunca
+ * el valor en sí.
  */
 export class PrototypeMonitor extends BaseMonitor {
   public readonly Name = "PrototypeMonitor";
@@ -126,18 +137,22 @@ export class PrototypeMonitor extends BaseMonitor {
     let emitted = 0;
     for (const [name, target] of Targets) {
       const previous = this.Baseline.get(name);
+      // Defensivo: sin baseline (no debería ocurrir mientras corre) no hay contra qué comparar.
       if (!previous) {
         continue;
       }
       const current = TakeSnapshot(target);
       const initial = this.Initial.get(name) ?? new Map<PropertyKey, DescriptorSnapshot>();
       for (const change of this.Diff(name, previous, current, initial)) {
+        // El límite es global a la verificación: al alcanzarlo, los prototipos restantes
+        // tampoco emiten (pero su baseline se actualiza igual).
         if (emitted >= MaxChangesPerCheck) {
           break;
         }
         this.Context.Emit("prototype.changed", this.Name, change);
         emitted++;
       }
+      // Se avanza el baseline: cada cambio se reporta una sola vez.
       this.Baseline.set(name, current);
     }
   }
@@ -152,6 +167,7 @@ export class PrototypeMonitor extends BaseMonitor {
     current: PrototypeSnapshot,
     initial: PrototypeSnapshot,
   ): Generator<PrototypeChangeData> {
+    // La propiedad está exactamente como al iniciar (incluida su ausencia).
     const isRevert = (key: PropertyKey): boolean => {
       const original = initial.get(key);
       const now = current.get(key);
@@ -177,6 +193,10 @@ export class PrototypeMonitor extends BaseMonitor {
     }
   }
 
+  /**
+   * Construye el evento de un cambio. Para funciones se indica si parecen nativas antes y
+   * después: sobrescribir un método nativo con código propio es la señal más relevante.
+   */
   private CreateChange(
     target: MonitoredPrototype,
     key: PropertyKey,
@@ -184,6 +204,7 @@ export class PrototypeMonitor extends BaseMonitor {
     snapshot?: DescriptorSnapshot,
     previous?: DescriptorSnapshot,
   ): PrototypeChangeData {
+    // String() es seguro con symbols ("Symbol(desc)"), a diferencia de la concatenación.
     const property = String(key);
     const data: PrototypeChangeData = { Target: target, Property: property, Change: change };
 

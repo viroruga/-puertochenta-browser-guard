@@ -5,7 +5,18 @@ import type { GuardPlugin } from "./Plugin";
 import type { Severity } from "./Severity";
 
 /**
- * Presets disponibles.
+ * Contratos de configuración: la pública (BrowserGuardConfig, lo que escribe quien
+ * integra la librería) y las resueltas (Resolved*), que produce Config/ tras aplicar
+ * preset, valores por defecto y límites, y que consume el resto del código.
+ */
+
+/**
+ * Presets disponibles:
+ * - development: consola con cada hallazgo, incluidos los informativos.
+ * - balanced: recomendado para uso general (por defecto); omite los informativos.
+ * - strict: solo hallazgos de severidad medium o superior.
+ * - forensic: registra todo y conserva una línea de tiempo de eventos para investigar;
+ *   la consola solo muestra medium o superior.
  */
 export type GuardPreset = "development" | "balanced" | "strict" | "forensic";
 
@@ -22,7 +33,9 @@ export type ConsoleMode = "silent" | "notice" | "findings";
  * Texto del aviso mostrado en modo "notice".
  */
 export interface ConsoleNoticeText {
+  /** Primera línea, destacada. */
   Title: string;
+  /** Texto explicativo debajo del título. */
   Message: string;
 }
 
@@ -44,9 +57,15 @@ export interface RemoteConfig {
   MinSeverity?: Severity;
   /** Hallazgos por lote (1 - 100). Por defecto: 20. */
   BatchSize?: number;
-  /** Espera máxima antes de enviar un lote incompleto, en ms (1000 - 60000). Por defecto: 5000. */
+  /**
+   * Espera máxima antes de enviar un lote incompleto, en ms (1000 - 60000). También es la
+   * base del backoff exponencial de los reintentos. Por defecto: 5000.
+   */
   FlushIntervalMs?: number;
-  /** Hallazgos retenidos en cola como máximo (10 - 5000). Por defecto: 200. */
+  /**
+   * Hallazgos retenidos en cola como máximo (10 - 5000); al superarlo se descartan los más
+   * antiguos. Por defecto: 200.
+   */
   MaxQueue?: number;
   /** Reintentos de un lote ante errores transitorios (0 - 10). Por defecto: 3. */
   MaxRetries?: number;
@@ -67,7 +86,8 @@ export interface RemoteConfig {
 }
 
 /**
- * Configuración remota resuelta.
+ * Configuración remota resuelta: valores por defecto aplicados y límites ya acotados.
+ * Ver RemoteConfig para el significado de cada campo.
  */
 export interface ResolvedRemoteConfig {
   Endpoint: string;
@@ -91,8 +111,12 @@ export interface ResolvedRemoteConfig {
  * necesita protección en el servidor, que el header de veredicto ayuda a implementar.
  */
 export interface AntiScrapingConfig {
-  /** Permite desactivar el plugin sin quitarlo (p. ej. en tests end-to-end). Por defecto: true. */
+  /**
+   * Permite desactivar el plugin sin quitarlo (p. ej. en tests end-to-end).
+   * Por defecto: true.
+   */
   Enabled?: boolean;
+  /** Familias de señales a observar. Todas activas por defecto. */
   Signals?: {
     /** navigator.webdriver, headless, rastros de Selenium/Puppeteer/Playwright... */
     Automation?: boolean;
@@ -103,9 +127,15 @@ export interface AntiScrapingConfig {
     /** Inconsistencias del entorno (renderizado por software, idiomas, ventana...). */
     Environment?: boolean;
   };
-  /** Solicitudes por minuto a partir de las cuales se considera ráfaga (10 - 10000). Por defecto: 120. */
+  /**
+   * Solicitudes por minuto a partir de las cuales se considera ráfaga (10 - 10000).
+   * Por defecto: 120.
+   */
   MaxRequestsPerMinute?: number;
-  /** Solicitudes consecutivas con id incremental para considerar barrido (3 - 1000). Por defecto: 10. */
+  /**
+   * Solicitudes consecutivas con id incremental para considerar barrido (3 - 1000).
+   * Por defecto: 10.
+   */
   SequentialThreshold?: number;
   /** Selector de los elementos cuyo contenido se protege. Por defecto: "[data-guard-protect]". */
   ProtectSelector?: string;
@@ -120,6 +150,7 @@ export interface AntiScrapingConfig {
    * Endpoint debe ser https, del mismo origen o localhost.
    */
   Challenge?: {
+    /** URL que responde con CreateChallenge(); se le agrega el parámetro `sid`. */
     Endpoint: string;
   };
   /** Header con el veredicto agregado a las solicitudes (fetch y XHR). */
@@ -137,7 +168,7 @@ export interface AntiScrapingConfig {
 }
 
 /**
- * Configuración anti-scraping resuelta.
+ * Configuración anti-scraping resuelta. Ver AntiScrapingConfig para cada campo.
  */
 export interface ResolvedAntiScrapingConfig {
   Signals: {
@@ -160,11 +191,17 @@ export interface ResolvedAntiScrapingConfig {
  * Monitores que pueden habilitarse o deshabilitarse.
  */
 export interface MonitorToggles {
+  /** Solicitudes con fetch(). */
   Fetch?: boolean;
+  /** Solicitudes con XMLHttpRequest. */
   Xhr?: boolean;
+  /** Conexiones WebSocket. */
   WebSocket?: boolean;
+  /** Inserción de scripts, iframes, object y embed en el DOM. */
   Dom?: boolean;
+  /** Violaciones de Content Security Policy informadas por el navegador. */
   Csp?: boolean;
+  /** Cambios en prototipos nativos (prototype pollution). */
   Prototype?: boolean;
   /** Verificación periódica de funciones críticas del runtime. */
   Runtime?: boolean;
@@ -187,6 +224,7 @@ export interface MonitorToggles {
  * los valores faltantes se completan con el preset seleccionado.
  */
 export interface BrowserGuardConfig {
+  /** Punto de partida de la configuración. Por defecto: "balanced". */
   Preset?: GuardPreset;
 
   /**
@@ -198,6 +236,7 @@ export interface BrowserGuardConfig {
   /** Personaliza el aviso del modo "notice". */
   Notice?: Partial<ConsoleNoticeText>;
 
+  /** Activa o desactiva monitores individuales; los omitidos toman el valor del preset. */
   Monitors?: MonitorToggles;
 
   /**
@@ -226,6 +265,7 @@ export interface BrowserGuardConfig {
     AllowedScriptOrigins?: string[];
   };
 
+  /** Línea de tiempo forense: conserva los eventos crudos recientes para investigar. */
   Forensic?: {
     Enabled?: boolean;
     /** Tamaño máximo de la línea de tiempo (ring buffer). */
@@ -243,7 +283,10 @@ export interface BrowserGuardConfig {
   };
 
   Risk?: {
-    /** Severidad mínima para registrar y emitir un hallazgo. */
+    /**
+     * Severidad mínima para registrar y emitir un hallazgo. También es el umbral de la
+     * consola en modo "findings" (sin él, cada preset fija su propio umbral de consola).
+     */
     MinSeverity?: Severity;
     /** Sobrescritura de pesos de señales de riesgo. */
     Weights?: RiskWeightOverrides;
@@ -261,11 +304,13 @@ export interface BrowserGuardConfig {
 }
 
 /**
- * Configuración completa luego de aplicar preset y valores por defecto.
+ * Configuración completa luego de aplicar preset y valores por defecto. Interna: la
+ * reciben monitores, detectores y plugins (PluginHost.Config).
  */
 export interface ResolvedConfig {
   Preset: GuardPreset;
   Console: ConsoleMode;
+  /** Umbral de ConsoleReporter (Risk.MinSeverity si se configuró, o el del preset). */
   ConsoleMinSeverity: Severity;
   Notice: ConsoleNoticeText;
   Monitors: Required<MonitorToggles>;
@@ -273,6 +318,7 @@ export interface ResolvedConfig {
   Learning: {
     Enabled: boolean;
   };
+  /** Network y Dom incluyen los orígenes aportados por los servicios declarados. */
   Network: {
     AllowedOrigins: string[];
     BlockedOrigins: string[];
@@ -296,7 +342,9 @@ export interface ResolvedConfig {
     MinSeverity: Severity;
     Weights: RiskWeightOverrides;
   };
+  /** No configurable: lo fija el preset. */
   Stack: {
+    /** Frames conservados en el stack de cada evento. */
     MaxFrames: number;
   };
 }

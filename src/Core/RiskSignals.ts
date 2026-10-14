@@ -1,4 +1,13 @@
 /**
+ * Catálogo de señales de riesgo y sus pesos por defecto.
+ *
+ * Es el vocabulario común entre Detectors y RiskEngine: los detectores no asignan
+ * puntajes, solo nombran lo que observaron; el peso de cada nombre vive aquí. Así la
+ * severidad se ajusta en un único lugar (o desde la configuración) sin tocar detectores.
+ * También lo usa BotSession para el veredicto de bot de la sesión.
+ */
+
+/**
  * Pesos por defecto de cada señal de riesgo.
  *
  * Los detectores emiten señales con nombre; RiskEngine suma sus pesos,
@@ -6,6 +15,10 @@
  * sobrescribirse desde la configuración (Risk.Weights).
  *
  * Referencia de umbrales: info < 20 ≤ low < 40 ≤ medium < 60 ≤ high < 80 ≤ critical.
+ *
+ * Criterio: una señal sola con peso ≥ 80 basta para un hallazgo crítico (p. ej. un
+ * origen bloqueado); las señales de contexto (5-25) solo elevan la severidad cuando
+ * acompañan a otras. Los pesos negativos son atenuantes, no exenciones.
  */
 export const DefaultRiskWeights = {
   // Red
@@ -33,6 +46,7 @@ export const DefaultRiskWeights = {
   // CSP
   "csp.violation": 35,
   "csp.script-directive": 20,
+  // Atenuante: en modo report-only el navegador no bloqueó nada.
   "csp.report-only": -10,
   "csp.blocked-origin": 50,
 
@@ -77,6 +91,7 @@ export const DefaultRiskWeights = {
   "bot.sequential-crawl": 45,
   "bot.no-interaction": 30,
   "bot.synthetic-events": 30,
+  // Atenuante: BotSession lo descarta si hay señales que la interacción no compensa.
   "bot.human-interaction": -25,
 } as const;
 

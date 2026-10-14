@@ -8,11 +8,15 @@ import { ClassifyOrigin, type OriginClassification } from "../Utils/UrlUtils";
 /** Esquemas que ejecutan código arbitrario sin pasar por un origen de red. */
 const DangerousSchemes: ReadonlySet<string> = new Set(["javascript:", "data:"]);
 
-/** Esquemas con contenido generado en tiempo de ejecución (equivalente a inline). */
+/**
+ * Esquemas con contenido generado en tiempo de ejecución (equivalente a inline): un
+ * script blob: lo construyó código de la propia página, no un servidor identificable.
+ */
 const GeneratedSchemes: ReadonlySet<string> = new Set(["blob:"]);
 
 /**
- * Analiza elementos insertados en el DOM (script, iframe, object, embed).
+ * Analiza elementos insertados en el DOM (evento "dom.element-inserted", de DomMonitor):
+ * script, iframe, object, embed.
  *
  * No asume que todo script dinámico sea un ataque: combina señales (creación
  * dinámica, inline, origen desconocido, ausencia de integrity, esquema peligroso,
@@ -24,6 +28,11 @@ const GeneratedSchemes: ReadonlySet<string> = new Set(["blob:"]);
  * - script externo desconocido → medium
  * - desconocido + sin integrity → high
  * - origen bloqueado → critical
+ *
+ * Para evitar falsos positivos, lo que viene en el HTML original (ParserInserted) no
+ * suma "creación dinámica" y sus scripts inline se ignoran; los orígenes permitidos
+ * (AllowedScriptOrigins, servicios declarados) quedan en info y no superan el umbral
+ * por defecto.
  */
 export class ScriptInjectionDetector implements Detector {
   public readonly Name = "ScriptInjectionDetector";
@@ -39,6 +48,7 @@ export class ScriptInjectionDetector implements Detector {
     return data.TagName === "script" ? this.AnalyzeScript(data) : this.AnalyzeEmbedded(data);
   }
 
+  /** Clasifica el origen del elemento contra la lista permitida indicada y BlockedOrigins. */
   private Classify(data: DomElementData, allowed: readonly string[]): OriginClassification {
     return ClassifyOrigin(
       data.Origin,
@@ -48,6 +58,10 @@ export class ScriptInjectionDetector implements Detector {
     );
   }
 
+  /**
+   * Scripts: el orden de las ramas importa. Inline/blob: primero (no hay origen que
+   * clasificar), luego los esquemas peligrosos y por último el origen de red.
+   */
   private AnalyzeScript(data: DomElementData): FindingCandidate | null {
     const signals: RiskSignal[] = data.ParserInserted ? [] : ["script.dynamic"];
     const scheme = data.Scheme ?? "";
@@ -65,6 +79,8 @@ export class ScriptInjectionDetector implements Detector {
       signals.push("script.dangerous-scheme");
       title = `Script with ${scheme} URL inserted`;
     } else {
+      // Para scripts solo vale AllowedScriptOrigins: permitir que un origen reciba
+      // solicitudes (Network.AllowedOrigins) no implica confiarle la ejecución de código.
       classification = this.Classify(data, this.Config.Dom.AllowedScriptOrigins);
       switch (classification) {
         case "blocked":
@@ -90,6 +106,7 @@ export class ScriptInjectionDetector implements Detector {
           title = "Script from non-network source inserted";
           break;
         default:
+          // same-origin: sin señales propias; solo hay hallazgo si fue dinámico (info).
           title = "Same-origin script inserted dynamically";
       }
     }
@@ -109,7 +126,9 @@ export class ScriptInjectionDetector implements Detector {
         Origin: data.Origin,
         Classification: classification,
         Inline: data.Inline,
+        // Del código inline solo se registra el largo, nunca el contenido.
         InlineLength: data.InlineLength,
+        // El hash de integrity no aporta al análisis; basta saber si está.
         Integrity: data.Integrity ? "present" : "missing",
         CrossOrigin: data.CrossOrigin,
         Type: data.Type,
@@ -120,6 +139,11 @@ export class ScriptInjectionDetector implements Detector {
     };
   }
 
+  /**
+   * iframe, object y embed. object/embed suman riesgo propio porque cargan contenido de
+   * plugins, raro en sitios modernos. Un iframe puede apuntar tanto a servicios de red
+   * como a scripts de terceros (widgets), por eso se aceptan ambas listas permitidas.
+   */
   private AnalyzeEmbedded(data: DomElementData): FindingCandidate | null {
     const signals: RiskSignal[] = data.ParserInserted ? [] : ["dom.embedded-content"];
     if (data.TagName === "object" || data.TagName === "embed") {
@@ -162,6 +186,7 @@ export class ScriptInjectionDetector implements Detector {
     };
   }
 
+  /** Descripción legible: qué elemento, hacia qué origen y cómo se insertó. */
   private Describe(
     tagName: string,
     data: DomElementData,

@@ -23,6 +23,12 @@ import type { Monitor } from "../Types/Monitor";
 import type { GuardContext } from "./GuardContext";
 
 /**
+ * Composición del núcleo: qué monitores, detectores y reporters crea BrowserGuard en
+ * Start() y en qué orden. Es el punto donde se registra un monitor o detector nuevo.
+ * Los componentes de los plugins no pasan por aquí (ver PluginManager).
+ */
+
+/**
  * Información de la página que necesitan los detectores.
  * GuardContext la implementa; en tests puede sustituirse por un objeto simple.
  */
@@ -32,7 +38,8 @@ export interface PageInfo {
 }
 
 /**
- * Fábricas de monitores, en orden de inicio.
+ * Fábricas de monitores, en orden de inicio. Cada una va asociada al interruptor de
+ * Config.Monitors que la habilita; un mismo interruptor puede habilitar varias.
  *
  * RuntimeMonitor va primero: su baseline debe capturar las funciones originales
  * antes de que los monitores de red instalen sus interceptores. Al detener,
@@ -51,7 +58,8 @@ const MonitorFactories: readonly (readonly [
   ["Dom", (context) => new DomMonitor(context)],
   ["Csp", (context) => new CspMonitor(context)],
   ["Prototype", (context) => new PrototypeMonitor(context)],
-  // Después de los monitores con tareas periódicas: sus timers usan el setTimeout original.
+  // Después de los monitores del núcleo con tareas periódicas: sus timers usan el
+  // setTimeout original. (Los monitores de plugins se inician después de este.)
   ["Sinks", (context) => new SinkMonitor(context)],
   // Al final: replica en los iframes los monitores ya configurados.
   ["Realms", (context) => new RealmMonitor(context)],
